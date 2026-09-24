@@ -50,6 +50,7 @@
       <option value="normal">Средняя</option>
       <option value="wide">Широкая</option>
     </select>
+    <button class="tool-select" id="toc-toggle" title="Оглавление книги" type="button">☰ Оглавление</button>
     <button class="tool-select tool-fs" id="fs-toggle" title="На весь экран" type="button">⛶</button>
   </div>
 
@@ -87,9 +88,33 @@
 
 {% if nxt %}<a class="next-fab" id="next-fab" href="{{ url_for('story', chapter_id=nxt.id) }}">Следующая глава →</a>{% endif %}
 
+<div class="toc-backdrop" id="toc-backdrop" hidden></div>
+<aside class="toc-pop" id="toc-pop" hidden>
+  <div class="toc-head">
+    <b>Оглавление</b><span>{{ book_total }} глав</span>
+    <button class="toc-close" id="toc-close" type="button" title="Закрыть">✕</button>
+  </div>
+  <nav class="toc-list">
+    {% for t in toc %}
+    <a class="toc-item {{ 'is-active' if t.id == ch.id }}" href="{{ url_for('story', chapter_id=t.id) }}">
+      <span class="toc-ord">{{ t.ord }}</span>
+      <span class="toc-name">{{ t.title }}</span>
+      {% if t.done %}<span class="badge badge-done">✓</span>
+      {% elif t.read_pct %}<span class="badge">{{ t.read_pct | pct }}%</span>{% endif %}
+    </a>
+    {% endfor %}
+  </nav>
+</aside>
+
 <section class="notes" id="notes">
   <h2 class="notes-title">Заметки к главе</h2>
   <form class="note-form" id="note-form" data-chapter="{{ ch.id }}">
+    <input type="hidden" id="note-quote" value="">
+    <div class="quote-chip" id="quote-chip" hidden>
+      <span class="quote-chip-label">Цитата:</span>
+      <span class="quote-chip-text" id="quote-chip-text"></span>
+      <button class="quote-chip-clear" id="quote-chip-clear" type="button" title="Убрать цитату">✕</button>
+    </div>
     <textarea class="note-input" id="note-text" rows="3" placeholder="Оставьте заметку к этой главе…" required></textarea>
     <div class="note-form-foot">
       <button class="btn btn-accent" type="submit">Отправить</button>
@@ -103,8 +128,11 @@
       <div class="note-head">
         <span class="avatar-note">Я</span>
         <b class="note-author">Ты</b>
-        <span class="note-time">{{ note.created_at }}</span>
+        <span class="note-time">{{ note.created_at }}{% if note.edited_at %} · изменено{% endif %}</span>
       </div>
+      {% if note.quote %}
+        <button class="note-quote" type="button" data-anchor="{{ note.quote }}" title="Перейти к цитате в тексте">«{{ note.quote }}»</button>
+      {% endif %}
       <div class="note-text">{{ note.text }}</div>
       <div class="note-foot">
         <div class="rating rating-sm" data-target="note" data-id="{{ note.id }}">
@@ -113,6 +141,7 @@
           <button class="rate-btn rate-down" data-delta="-1">▼</button>
         </div>
         <button class="note-reply" data-parent="{{ note.id }}" type="button">Ответить</button>
+        <button class="note-edit" data-note="{{ note.id }}" type="button">Править</button>
         <button class="note-delete" data-note="{{ note.id }}" type="button">Удалить</button>
       </div>
       <div class="note-children">

@@ -175,15 +175,15 @@
     window.scrollTo(0, Math.round(absTop + (total * saved) / 100));
   }
 
-  // ------------------------------------------------ N2: подсветка ?find=
-  (function highlightFind() {
-    const find = new URLSearchParams(location.search).get("find");
-    if (!find || !readerEl) return;
-    const needle = find.toLowerCase();
+  // ------------------------------------------------ подсветка в тексте
+  // используется для ?find= (N2) и перехода по цитате заметки (R1)
+  function highlightInReader(needle) {
+    if (!readerEl || !needle) return false;
+    const lower = needle.toLowerCase();
     const walker = document.createTreeWalker(readerEl, NodeFilter.SHOW_TEXT);
     let node;
     while ((node = walker.nextNode())) {
-      const idx = node.nodeValue.toLowerCase().indexOf(needle);
+      const idx = node.nodeValue.toLowerCase().indexOf(lower);
       if (idx === -1) continue;
       try {
         const range = document.createRange();
@@ -193,11 +193,24 @@
         mark.className = "find-mark";
         range.surroundContents(mark);
         mark.scrollIntoView({ block: "center" });
+        setTimeout(() => {
+          const parent = mark.parentNode;
+          if (!parent) return;
+          while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
+          parent.removeChild(mark);
+          if (parent.normalize) parent.normalize();
+        }, 4000);
       } catch (e) {
         /* range за пределами узла — пропускаем */
       }
-      break;
+      return true;
     }
+    return false;
+  }
+
+  (function highlightFind() {
+    const find = new URLSearchParams(location.search).get("find");
+    if (find) highlightInReader(find);
   })();
 
   // ------------------------------------------------ M2: свайп между главами
@@ -288,10 +301,17 @@
   function noteNodeHtml(note, depth) {
     const esc = (s) =>
       s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const quote = note.quote
+      ? '<button class="note-quote" type="button" data-anchor="' +
+        esc(note.quote).replace(/"/g, "&quot;") +
+        '" title="Перейти к цитате в тексте">«' + esc(note.quote) + "»</button>"
+      : "";
+    const edited = note.edited_at ? " · изменено" : "";
     return (
       '<div class="note' + (depth > 0 ? " note-nested" : "") + '" data-note="' + note.id + '">' +
       '<div class="note-head"><span class="avatar-note">Я</span><b class="note-author">Ты</b>' +
-      '<span class="note-time">' + note.created_at + "</span></div>" +
+      '<span class="note-time">' + note.created_at + edited + "</span></div>" +
+      quote +
       '<div class="note-text">' + esc(note.text) + "</div>" +
       '<div class="note-foot">' +
       '<div class="rating rating-sm" data-target="note" data-id="' + note.id + '">' +
@@ -299,6 +319,7 @@
       '<span class="rating-num">' + note.rating + "</span>" +
       '<button class="rate-btn rate-down" data-delta="-1">▼</button></div>' +
       '<button class="note-reply" data-parent="' + note.id + '" type="button">Ответить</button>' +
+      '<button class="note-edit" data-note="' + note.id + '" type="button">Править</button>' +
       '<button class="note-delete" data-note="' + note.id + '" type="button">Удалить</button>' +
       "</div><div class='note-children'></div></div>"
     );
@@ -310,6 +331,7 @@
   }
 
   if (noteForm) {
+    const quoteField = document.getElementById("note-quote");
     noteForm.addEventListener("submit", (e) => {
       e.preventDefault();
       const ta = document.getElementById("note-text");
@@ -319,6 +341,7 @@
         chapter_id: noteForm.dataset.chapter,
         parent_id: replyTo,
         text,
+        quote: quoteField ? quoteField.value : "",
       }).then((res) => {
         if (!res.ok) return;
         removeEmpty();
@@ -332,6 +355,9 @@
           tree.insertAdjacentHTML("beforeend", html);
         }
         ta.value = "";
+        if (quoteField) quoteField.value = "";
+        const chip = document.getElementById("quote-chip");
+        if (chip) chip.hidden = true;
         replyTo = null;
         const hint = noteForm.querySelector(".note-hint");
         hint.textContent = "Заметки видны только тебе";
@@ -363,6 +389,200 @@
           }
         }
       });
+    }
+  });
+
+  // ------------------------------------------------ R1: заметка к выделению
+  let selPop = null;
+  let pendingQuote = "";
+
+  function hideSelPop() {
+    if (selPop) selPop.hidden = true;
+  }
+
+  function ensureSelPop() {
+    if (selPop) return selPop;
+    selPop = document.createElement("div");
+    selPop.className = "sel-pop";
+    selPop.hidden = true;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "📝 Заметить";
+    btn.addEventListener("mousedown", (e) => e.preventDefault()); // не терять выделение
+    btn.addEventListener("click", () => {
+      const hidden = document.getElementById("note-quote");
+      const chip = document.getElementById("quote-chip");
+      const ta = document.getElementById("note-text");
+      if (hidden) hidden.value = pendingQuote;
+      if (chip) {
+        chip.hidden = false;
+        const txt = document.getElementById("quote-chip-text");
+        if (txt) txt.textContent = "«" + pendingQuote + "»";
+      }
+      hideSelPop();
+      if (ta) {
+        ta.focus();
+        const notes = document.getElementById("notes");
+        if (notes) notes.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    });
+    selPop.appendChild(btn);
+    document.body.appendChild(selPop);
+    return selPop;
+  }
+
+  function onSelection() {
+    if (!readerEl) return;
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed || !sel.rangeCount) {
+      hideSelPop();
+      return;
+    }
+    const node = sel.anchorNode;
+    const inReader = node && readerEl.contains(node.nodeType === 1 ? node : node.parentNode);
+    const text = sel.toString().replace(/\s+/g, " ").trim();
+    if (!inReader || !text) {
+      hideSelPop();
+      return;
+    }
+    pendingQuote = text.slice(0, 300);
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const pop = ensureSelPop();
+    pop.hidden = false;
+    const half = pop.offsetWidth / 2 || 50;
+    const left = Math.max(half + 4, Math.min(rect.left + rect.width / 2, window.innerWidth - half - 4));
+    pop.style.left = left + "px";
+    pop.style.top = Math.max(8, rect.top - 46) + "px";
+  }
+
+  if (readerEl) {
+    document.addEventListener("mouseup", () => setTimeout(onSelection, 10));
+    document.addEventListener("touchend", () => setTimeout(onSelection, 120));
+    document.addEventListener("mousedown", (e) => {
+      if (selPop && !selPop.hidden && !selPop.contains(e.target)) hideSelPop();
+    });
+    document.addEventListener("touchstart", (e) => {
+      if (selPop && !selPop.hidden && e.target && !selPop.contains(e.target)) hideSelPop();
+    }, { passive: true });
+  }
+
+  const chipClear = document.getElementById("quote-chip-clear");
+  if (chipClear) {
+    chipClear.addEventListener("click", () => {
+      const hidden = document.getElementById("note-quote");
+      const chip = document.getElementById("quote-chip");
+      if (hidden) hidden.value = "";
+      if (chip) chip.hidden = true;
+    });
+  }
+
+  // R1: клик по цитате заметки → прыжок к месту в тексте
+  document.addEventListener("click", (e) => {
+    const q = e.target.closest(".note-quote");
+    if (!q) return;
+    highlightInReader(q.dataset.anchor || q.textContent.replace(/^«|»$/g, ""));
+  });
+
+  // ------------------------------------------------ R2: правка заметки
+  document.addEventListener("click", (e) => {
+    const edit = e.target.closest(".note-edit");
+    if (!edit) return;
+    const node = edit.closest(".note");
+    if (!node) return;
+    const textEl = node.querySelector(".note-text");
+    if (!textEl || node.querySelector(".note-edit-area")) return;
+    const original = textEl.textContent;
+    const ta = document.createElement("textarea");
+    ta.className = "note-edit-area";
+    ta.rows = 3;
+    ta.value = original;
+    const save = document.createElement("button");
+    save.className = "btn btn-accent note-edit-save";
+    save.type = "button";
+    save.textContent = "Сохранить";
+    const cancel = document.createElement("button");
+    cancel.className = "btn note-edit-cancel";
+    cancel.type = "button";
+    cancel.textContent = "Отмена";
+    textEl.hidden = true;
+    textEl.after(ta);
+    textEl.after(cancel);
+    textEl.after(save);
+    ta.focus();
+    const close = () => {
+      ta.remove();
+      save.remove();
+      cancel.remove();
+      textEl.hidden = false;
+    };
+    cancel.addEventListener("click", close);
+    save.addEventListener("click", () => {
+      const text = ta.value.trim();
+      if (!text) return;
+      post("/api/note/edit", { id: edit.dataset.note, text }).then((res) => {
+        if (!res.ok) return;
+        textEl.textContent = res.note.text;
+        close();
+        const time = node.querySelector(".note-time");
+        if (time && res.note.edited_at && !time.textContent.includes("изменено")) {
+          time.textContent += " · изменено";
+        }
+      });
+    });
+  });
+
+  // ------------------------------------------------ N3: оглавление
+  const tocToggle = document.getElementById("toc-toggle");
+  const tocPop = document.getElementById("toc-pop");
+  const tocBackdrop = document.getElementById("toc-backdrop");
+  function openToc(open) {
+    if (!tocPop) return;
+    tocPop.hidden = !open;
+    tocBackdrop.hidden = !open;
+  }
+  if (tocToggle) tocToggle.addEventListener("click", () => openToc(tocPop.hidden));
+  const tocClose = document.getElementById("toc-close");
+  if (tocClose) tocClose.addEventListener("click", () => openToc(false));
+  if (tocBackdrop) tocBackdrop.addEventListener("click", () => openToc(false));
+
+  // ------------------------------------------------ R5: горячие клавиши
+  document.addEventListener("keydown", (e) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const t = e.target;
+    const typing =
+      t &&
+      (t.tagName === "INPUT" ||
+        t.tagName === "TEXTAREA" ||
+        t.tagName === "SELECT" ||
+        t.isContentEditable);
+    if (e.key === "Escape") {
+      openToc(false);
+      hideSelPop();
+      return;
+    }
+    // "/" (и "?" на русской раскладке) — фокус в поиск
+    if ((e.key === "/" || e.key === "?") && !typing) {
+      const input = document.querySelector(".search input");
+      if (input) {
+        e.preventDefault();
+        input.focus();
+        input.select();
+      }
+      return;
+    }
+    if (typing) return;
+    if (window.getSelection && String(window.getSelection()).length > 0) return;
+    if (storyPage) {
+      if (e.key === "ArrowLeft") {
+        const u = storyPage.dataset.prev;
+        if (u) location.href = u;
+      } else if (e.key === "ArrowRight") {
+        const u = storyPage.dataset.nxt;
+        if (u) location.href = u;
+      } else if (e.key === "b" || e.key === "B" || e.key === "и" || e.key === "И") {
+        const btn = document.querySelector(".bookmark-btn");
+        if (btn) btn.click();
+      }
     }
   });
 })();

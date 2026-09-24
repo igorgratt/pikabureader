@@ -40,6 +40,7 @@
         <a href="{{ url_for('feed', t='library') }}">📖 Мои книги <span class="side-count">{{ nav_counts.books }}</span></a>
         <a href="{{ url_for('bookmarks') }}">🔖 Закладки <span class="side-count">{{ nav_counts.bookmarks }}</span></a>
         <a href="{{ url_for('feed', t='reading') }}">⏳ Сейчас читаю <span class="side-count">{{ nav_counts.reading }}</span></a>
+        <a href="{{ url_for('settings_page') }}">⚙ Настройки</a>
       </nav>
       <div class="side-card">
         <div class="side-card-title">Темы книг</div>

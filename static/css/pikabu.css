@@ -482,6 +482,117 @@ img { max-width: 100%; }
   background: var(--accent); color: #1a1a1a; padding: 0 1px; border-radius: 2px;
 }
 
+/* ---------------- R1: выделение → заметка ---------------- */
+.sel-pop {
+  position: absolute; z-index: 60; transform: translateX(-50%);
+  background: #1f1f1f; border-radius: 8px; padding: 3px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, .35);
+}
+.sel-pop button {
+  border: 0; background: transparent; color: #fff;
+  font-size: 14px; padding: 7px 12px; border-radius: 6px; cursor: pointer;
+}
+.sel-pop button:hover { background: rgba(255, 255, 255, .15); }
+
+.quote-chip {
+  display: flex; gap: 8px; align-items: baseline;
+  background: rgba(255, 214, 0, .14); border-left: 3px solid var(--accent);
+  padding: 6px 10px; margin-bottom: 6px; border-radius: 0 6px 6px 0;
+  font-size: 14px;
+}
+.quote-chip-label {
+  color: var(--text-2); font-size: 11px;
+  text-transform: uppercase; letter-spacing: .04em; flex-shrink: 0;
+}
+.quote-chip-text {
+  flex: 1; font-style: italic; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
+.quote-chip-clear {
+  border: 0; background: transparent; color: var(--text-2);
+  cursor: pointer; font-size: 14px; padding: 0 2px;
+}
+.quote-chip-clear:hover { color: var(--red); }
+
+.note-quote {
+  display: block; width: 100%; text-align: left;
+  border: 0; border-left: 3px solid var(--accent);
+  background: rgba(255, 214, 0, .1); color: var(--text-2);
+  font-style: italic; font-size: 14px; line-height: 1.4;
+  padding: 6px 10px; margin-bottom: 6px; border-radius: 0 6px 6px 0;
+  cursor: pointer;
+}
+.note-quote:hover { background: rgba(255, 214, 0, .2); color: var(--text); }
+
+/* ---------------- R2: правка заметки ---------------- */
+.note-edit-area {
+  width: 100%; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text);
+  font: inherit; font-size: 14px; padding: 8px 10px;
+  resize: vertical; margin-bottom: 6px;
+}
+.note-edit-save, .note-edit-cancel { font-size: 13px; padding: 5px 12px; margin-right: 6px; }
+
+/* ---------------- N3: оглавление ---------------- */
+.toc-backdrop {
+  position: fixed; inset: 0; z-index: 70;
+  background: rgba(0, 0, 0, .45);
+}
+.toc-pop {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 71;
+  width: min(360px, 92vw); background: var(--card);
+  border-left: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  box-shadow: -8px 0 30px rgba(0, 0, 0, .25);
+}
+.toc-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 14px 16px; border-bottom: 1px solid var(--border);
+}
+.toc-head b { flex: 1; font-size: 16px; }
+.toc-head span { color: var(--text-2); font-size: 13px; }
+.toc-close {
+  border: 0; background: transparent; color: var(--text-2);
+  font-size: 16px; cursor: pointer; padding: 4px 8px;
+}
+.toc-close:hover { color: var(--red); }
+.toc-list { overflow-y: auto; padding: 8px; flex: 1; }
+.toc-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px; border-radius: 8px;
+  color: var(--text); text-decoration: none; font-size: 14px;
+}
+.toc-item:hover { background: var(--bg); text-decoration: none; }
+.toc-item.is-active { background: rgba(255, 214, 0, .18); font-weight: 600; }
+.toc-ord { color: var(--text-2); font-size: 12px; min-width: 22px; text-align: right; }
+.toc-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---------------- settings ---------------- */
+.settings-card {
+  background: var(--card); border-radius: 12px;
+  padding: 18px 20px; margin-bottom: 16px; box-shadow: var(--shadow);
+}
+.settings-title { margin: 0 0 10px; font-size: 17px; }
+.settings-desc { color: var(--text-2); font-size: 14px; margin: 0 0 12px; }
+.settings-desc code { background: var(--bg); padding: 1px 5px; border-radius: 4px; }
+.settings-stats { display: flex; gap: 18px; flex-wrap: wrap; }
+.settings-stat { color: var(--text-2); font-size: 14px; }
+.settings-stat b { color: var(--text); font-size: 18px; }
+.settings-warn { color: var(--red); font-size: 13px; margin: 10px 0 0; }
+.restore-form {
+  display: flex; align-items: center; gap: 12px;
+  flex-wrap: wrap; margin-top: 14px;
+  padding-top: 14px; border-top: 1px solid var(--border);
+}
+.restore-label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.hotkeys { margin: 0; padding-left: 18px; font-size: 14px; }
+.hotkeys li { margin-bottom: 6px; }
+kbd {
+  background: var(--bg); border: 1px solid var(--border);
+  border-bottom-width: 2px; border-radius: 4px;
+  padding: 1px 6px; font-size: 12px; font-family: inherit;
+}
+
 /* ---------------- responsive ---------------- */
 .tabbar { display: none; }
 .topbar { transition: transform .2s; }

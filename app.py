@@ -7,12 +7,12 @@ from functools import wraps
 from html import escape as _escape
 
 from flask import (Flask, Response, abort, flash, redirect, render_template,
-                   request, send_from_directory, url_for)
+                   request, send_file, send_from_directory, url_for)
 
 import db
 from parsers import parse_book
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -303,6 +303,13 @@ def story(chapter_id: int):
         total = conn.execute(
             "SELECT COUNT(*) c FROM chapters WHERE book_id = ?", (ch["bid"],)
         ).fetchone()["c"]
+        # N3: оглавление книги с прогрессом по главам
+        toc = conn.execute(
+            """SELECT c.id, c.ord, c.title, s.read_pct, s.done
+               FROM chapters c LEFT JOIN state s ON s.chapter_id = c.id
+               WHERE c.book_id = ? ORDER BY c.ord""",
+            (ch["bid"],),
+        ).fetchall()
     finally:
         conn.close()
 
@@ -311,6 +318,7 @@ def story(chapter_id: int):
     nodes: dict = {}
     for n in notes:
         node = {"id": n["id"], "text": n["text"], "rating": n["rating"],
+                "quote": n["quote"], "edited_at": n["edited_at"],
                 "created_at": n["created_at"], "children": []}
         nodes[n["id"]] = node
     for n in notes:
@@ -321,7 +329,7 @@ def story(chapter_id: int):
             tree[None].append(nodes[n["id"]])
     return render_template(
         "story.html", ch=ch, prev=prev, nxt=nxt, note_tree=tree[None],
-        book_pos=ch["ord"], book_total=total,
+        book_pos=ch["ord"], book_total=total, toc=toc,
     )
 
 
@@ -503,16 +511,43 @@ def api_note():
     cid = int(payload.get("chapter_id", 0))
     parent = payload.get("parent_id")
     text = (payload.get("text") or "").strip()
+    # R1: цитата выделенного текста (обрезаем до разумной длины)
+    quote = (payload.get("quote") or "").strip()[:300]
     if not text or cid <= 0:
         raise ValueError("empty note")
     conn = get_db()
     try:
         cur = conn.execute(
-            "INSERT INTO notes(chapter_id, parent_id, text, created_at) VALUES(?,?,?,?)",
-            (cid, int(parent) if parent else None, text, db.now()),
+            "INSERT INTO notes(chapter_id, parent_id, text, quote, created_at) "
+            "VALUES(?,?,?,?,?)",
+            (cid, int(parent) if parent else None, text, quote, db.now()),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM notes WHERE id = ?", (cur.lastrowid,)).fetchone()
+    finally:
+        conn.close()
+    return {"ok": True, "note": dict(row)}
+
+
+@app.post("/api/note/edit")
+@json_api
+def api_note_edit():
+    """R2: правка своей заметки — текст + дата правки."""
+    payload = request.get_json(force=True)
+    nid = int(payload.get("id", 0))
+    text = (payload.get("text") or "").strip()
+    if not text or nid <= 0:
+        raise ValueError("empty note")
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "UPDATE notes SET text = ?, edited_at = ? WHERE id = ?",
+            (text, db.now(), nid),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise ValueError("note not found")
+        row = conn.execute("SELECT * FROM notes WHERE id = ?", (nid,)).fetchone()
     finally:
         conn.close()
     return {"ok": True, "note": dict(row)}
@@ -571,6 +606,131 @@ def api_settings():
 @json_api
 def api_settings_get():
     return {"ok": True, "settings": db.get_settings()}
+
+
+# ---------------------------------------------------------------- M4: бэкап
+
+def _data_size() -> int:
+    total = 0
+    for root, _, files in os.walk(db.DATA_DIR):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except OSError:
+                pass
+    return total
+
+
+def _fmt_size(n: int) -> str:
+    for unit in ("Б", "КБ", "МБ", "ГБ"):
+        if n < 1024 or unit == "ГБ":
+            return f"{n:.0f} {unit}" if unit == "Б" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} ГБ"
+
+
+@app.get("/settings")
+def settings_page():
+    conn = get_db()
+    try:
+        stats = {
+            "books": conn.execute("SELECT COUNT(*) c FROM books").fetchone()["c"],
+            "chapters": conn.execute("SELECT COUNT(*) c FROM chapters").fetchone()["c"],
+            "notes": conn.execute("SELECT COUNT(*) c FROM notes").fetchone()["c"],
+        }
+    finally:
+        conn.close()
+    return render_template(
+        "settings.html", stats=stats, data_size=_fmt_size(_data_size()),
+        schema_version=db.schema_version(),
+    )
+
+
+@app.get("/api/backup.zip")
+def backup_download():
+    """M4: экспорт data/ (база, картинки, обложки) в zip."""
+    import io
+    import zipfile
+    from datetime import datetime, timezone
+
+    if not os.path.exists(db.DB_PATH):
+        abort(404)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for root, _, files in os.walk(db.DATA_DIR):
+            for f in files:
+                p = os.path.join(root, f)
+                zf.write(p, os.path.relpath(p, db.DATA_DIR))
+    buf.seek(0)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
+    return send_file(
+        buf, mimetype="application/zip", as_attachment=True,
+        download_name=f"pikabureader-backup-{stamp}.zip",
+    )
+
+
+@app.post("/api/backup/restore")
+def backup_restore():
+    """M4: восстановление data/ из zip. Ничего не трогаем, пока архив
+    не прочитан и не прошёл проверку."""
+    import shutil
+    import tempfile
+    import zipfile
+
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Файл бэкапа не выбран")
+        return redirect(url_for("settings_page"))
+    if not file.filename.lower().endswith(".zip"):
+        flash("Ожидается zip-архив, скачанный через «Скачать бэкап»")
+        return redirect(url_for("settings_page"))
+
+    tmp = tempfile.mkdtemp(prefix="pikabu-restore-")
+    try:
+        # 1. распаковка во временный каталог (защита от zip slip)
+        try:
+            with zipfile.ZipFile(file) as zf:
+                dest = os.path.realpath(tmp)
+                for name in zf.namelist():
+                    target = os.path.realpath(os.path.join(tmp, name))
+                    if target != dest and not target.startswith(dest + os.sep):
+                        raise ValueError(f"небезопасный путь в архиве: {name}")
+                zf.extractall(tmp)
+        except Exception as exc:  # noqa: BLE001
+            flash(f"Не удалось прочитать архив: {exc}")
+            return redirect(url_for("settings_page"))
+
+        # 2. проверка, что это действительно бэкап с живой базой
+        dbfile = os.path.join(tmp, "app.db")
+        if not os.path.exists(dbfile):
+            flash("В архиве нет app.db — это не бэкап PikaBuReader")
+            return redirect(url_for("settings_page"))
+        try:
+            probe = sqlite3.connect(dbfile)
+            probe.execute("PRAGMA quick_check").fetchone()
+            probe.close()
+        except sqlite3.DatabaseError as exc:
+            flash(f"База в архиве повреждена: {exc}")
+            return redirect(url_for("settings_page"))
+
+        # 3. замена data/ (активных соединений между запросами нет)
+        try:
+            for sub in ("images", "covers", "uploads"):
+                shutil.rmtree(os.path.join(db.DATA_DIR, sub), ignore_errors=True)
+            os.replace(dbfile, db.DB_PATH)
+            for sub in ("images", "covers", "uploads"):
+                src = os.path.join(tmp, sub)
+                if os.path.isdir(src):
+                    shutil.move(src, os.path.join(db.DATA_DIR, sub))
+            db.init_db()  # поднять миграции, если бэкап от старой версии
+        except (OSError, sqlite3.Error) as exc:
+            flash(f"Ошибка при восстановлении: {exc}")
+            return redirect(url_for("settings_page"))
+
+        flash("Бэкап восстановлен")
+        return redirect(url_for("feed"))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- init

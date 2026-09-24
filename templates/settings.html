@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Настройки — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="feed-head">
+  <h1>Настройки</h1>
+  <div class="feed-sub">PikaBuReader v{{ app_version }} · схема БД v{{ schema_version }}</div>
+</div>
+
+<section class="settings-card">
+  <h2 class="settings-title">Данные</h2>
+  <div class="settings-stats">
+    <span class="settings-stat"><b>{{ stats.books }}</b> книг</span>
+    <span class="settings-stat"><b>{{ stats.chapters }}</b> глав</span>
+    <span class="settings-stat"><b>{{ stats.notes }}</b> заметок</span>
+    <span class="settings-stat"><b>{{ data_size }}</b> на диске</span>
+  </div>
+</section>
+
+<section class="settings-card">
+  <h2 class="settings-title">Бэкап и восстановление</h2>
+  <p class="settings-desc">
+    Бэкап — это zip со всей папкой <code>data/</code>: база, обложки, картинки.
+    Скачивай бэкап перед обновлениями и раз в месяц.
+  </p>
+  <a class="btn btn-accent" href="{{ url_for('backup_download') }}">⬇ Скачать бэкап (zip)</a>
+
+  <form class="restore-form" action="{{ url_for('backup_restore') }}" method="post" enctype="multipart/form-data">
+    <label class="restore-label">
+      Восстановить из бэкапа
+      <input type="file" name="file" accept=".zip" required>
+    </label>
+    <button class="btn" type="submit">Восстановить</button>
+  </form>
+  <p class="settings-warn">
+    ⚠ Восстановление <b>полностью заменит</b> текущие книги, прогресс и заметки.
+  </p>
+</section>
+
+<section class="settings-card">
+  <h2 class="settings-title">Горячие клавиши</h2>
+  <ul class="hotkeys">
+    <li><kbd>←</kbd> <kbd>→</kbd> — предыдущая/следующая глава</li>
+    <li><kbd>B</kbd> — закладка на главе</li>
+    <li><kbd>/</kbd> — перейти в поиск</li>
+  </ul>
+</section>
+{% endblock %}

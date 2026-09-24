@@ -69,3 +69,31 @@ def test_settings_roundtrip(isolated_db):
     db.save_setting("size", "18")
     s = db.get_settings()
     assert s["theme"] == "light" and s["size"] == "18"
+
+
+def test_notes_v3_columns(isolated_db):
+    """Миграция 3: quote и edited_at у заметок (R1/R2)."""
+    db.init_db()
+    conn = db.connect()
+    try:
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(notes)")]
+        cur = conn.execute(
+            "INSERT INTO books(title, author, created_at) VALUES('t','a','x')"
+        )
+        cur = conn.execute(
+            "INSERT INTO chapters(book_id, ord, title, html, created_at) "
+            "VALUES(?, 1, 'h', '<p>x</p>', 'x')",
+            (cur.lastrowid,),
+        )
+        cur = conn.execute(
+            "INSERT INTO notes(chapter_id, text, quote, created_at) VALUES(?, 'т', 'цит', 'x')",
+            (cur.lastrowid,),
+        )
+        row = conn.execute(
+            "SELECT quote, edited_at FROM notes WHERE id = ?", (cur.lastrowid,)
+        ).fetchone()
+        conn.commit()
+    finally:
+        conn.close()
+    assert "quote" in cols and "edited_at" in cols
+    assert row["quote"] == "цит" and row["edited_at"] == ""

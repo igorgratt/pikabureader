@@ -1,7 +1,7 @@
 import os
 import re
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS settings (
 # ключ = номер версии, значение = SQL-скрипт апгрейда. Порядок применяется
 # по возрастанию, каждая миграция выполняется транзакционно и поднимает
 # PRAGMA user_version. SCHEMA — только для создания новой базы с нуля.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MIGRATIONS: dict[int, str] = {
     2: """
@@ -65,7 +65,11 @@ MIGRATIONS: dict[int, str] = {
         DELETE FROM chapters_fts WHERE rowid = old.id;
     END;
     """,
-    # 3: "ALTER TABLE books ADD COLUMN language TEXT NOT NULL DEFAULT ''",
+    # 3: цитата к заметке (R1) + дата правки (R2)
+    3: """
+    ALTER TABLE notes ADD COLUMN quote TEXT NOT NULL DEFAULT '';
+    ALTER TABLE notes ADD COLUMN edited_at TEXT NOT NULL DEFAULT '';
+    """,
 }
 
 
@@ -129,7 +133,7 @@ def schema_version() -> int:
 
 
 def now() -> str:
-    return datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def get_settings() -> dict:
