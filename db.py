@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 from datetime import datetime
 
@@ -49,6 +50,24 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 """
 
+# Версия схемы (baseline = 1). Новые изменения — только через MIGRATIONS:
+# ключ = номер версии, значение = SQL-скрипт апгрейда. Порядок применяется
+# по возрастанию, каждая миграция выполняется транзакционно и поднимает
+# PRAGMA user_version. SCHEMA — только для создания новой базы с нуля.
+SCHEMA_VERSION = 2
+
+MIGRATIONS: dict[int, str] = {
+    2: """
+    CREATE VIRTUAL TABLE IF NOT EXISTS chapters_fts USING fts5(
+        title, content, tokenize='unicode61 remove_diacritics 2'
+    );
+    CREATE TRIGGER IF NOT EXISTS chapters_fts_del AFTER DELETE ON chapters BEGIN
+        DELETE FROM chapters_fts WHERE rowid = old.id;
+    END;
+    """,
+    # 3: "ALTER TABLE books ADD COLUMN language TEXT NOT NULL DEFAULT ''",
+}
+
 
 def connect() -> sqlite3.Connection:
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -62,7 +81,49 @@ def init_db() -> None:
     conn = connect()
     try:
         conn.executescript(SCHEMA)
+        current = conn.execute("PRAGMA user_version").fetchone()[0]
+        if current > SCHEMA_VERSION:
+            raise RuntimeError(
+                f"База данных версии {current} новее кода ({SCHEMA_VERSION}): "
+                "обновите приложение, откат схемы не поддерживается"
+            )
+        for target in sorted(MIGRATIONS):
+            if current < target:
+                conn.executescript(MIGRATIONS[target])
+                conn.execute(f"PRAGMA user_version = {target}")
+                current = target
+        if current < SCHEMA_VERSION:
+            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        _reindex_fts(conn)
         conn.commit()
+    finally:
+        conn.close()
+
+
+def strip_html(html: str) -> str:
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
+
+
+def _reindex_fts(conn: sqlite3.Connection) -> None:
+    """Первая миграция или пустой индекс — наполнить FTS из глав."""
+    try:
+        fts_count = conn.execute("SELECT COUNT(*) c FROM chapters_fts").fetchone()["c"]
+    except sqlite3.OperationalError:
+        return
+    if fts_count:
+        return
+    rows = conn.execute("SELECT id, title, html FROM chapters").fetchall()
+    for r in rows:
+        conn.execute(
+            "INSERT INTO chapters_fts(rowid, title, content) VALUES (?,?,?)",
+            (r["id"], r["title"], strip_html(r["html"])),
+        )
+
+
+def schema_version() -> int:
+    conn = connect()
+    try:
+        return conn.execute("PRAGMA user_version").fetchone()[0]
     finally:
         conn.close()
 

@@ -14,6 +14,18 @@
   </div>
 {% endif %}
 
+{% if q and chapter_hits %}
+<div class="search-hits">
+  <div class="feed-head"><h2>Главы по запросу «{{ q }}»</h2></div>
+  {% for h in chapter_hits %}
+  <a class="search-hit" href="{{ url_for('story', chapter_id=h.id) }}?find={{ q | urlencode }}">
+    <b>{{ h.title }}</b><i>{{ h.bt }}</i>
+    <p class="search-hit-snip">{{ h.snip | safe }}</p>
+  </a>
+  {% endfor %}
+</div>
+{% endif %}
+
 {% for r in rows %}
 <article class="story-card" data-chapter="{{ r.id }}">
   <header class="story-head">

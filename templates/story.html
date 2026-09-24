@@ -2,13 +2,16 @@
 {% block title %}{{ ch.title }} — {{ ch.book_title }} — PikaBuReader{% endblock %}
 
 {% block content %}
+<div class="read-progress" id="read-progress" aria-hidden="true"><span id="read-progress-fill"></span></div>
 <nav class="crumbs">
   <a href="{{ url_for('book_page', book_id=ch.bid) }}">{{ ch.book_title }}</a>
   <span>/</span>
   <span>Глава {{ book_pos }} из {{ book_total }}</span>
 </nav>
 
-<article class="story-page" data-chapter="{{ ch.id }}">
+<article class="story-page" data-chapter="{{ ch.id }}" data-read-pct="{{ ch.read_pct or 0 }}"
+  {% if prev %}data-prev="{{ url_for('story', chapter_id=prev.id) }}"{% endif %}
+  {% if nxt %}data-nxt="{{ url_for('story', chapter_id=nxt.id) }}"{% endif %}>
   <header class="story-head story-head-lg">
     <a class="story-community" href="{{ url_for('book_page', book_id=ch.bid) }}">
       {% if ch.cover %}
@@ -47,6 +50,7 @@
       <option value="normal">Средняя</option>
       <option value="wide">Широкая</option>
     </select>
+    <button class="tool-select tool-fs" id="fs-toggle" title="На весь экран" type="button">⛶</button>
   </div>
 
   <div class="reader" id="reader">
@@ -80,6 +84,8 @@
     </button>
   </footer>
 </article>
+
+{% if nxt %}<a class="next-fab" id="next-fab" href="{{ url_for('story', chapter_id=nxt.id) }}">Следующая глава →</a>{% endif %}
 
 <section class="notes" id="notes">
   <h2 class="notes-title">Заметки к главе</h2>

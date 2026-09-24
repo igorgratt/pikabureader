@@ -4,12 +4,15 @@ import re
 import sqlite3
 import uuid
 from functools import wraps
+from html import escape as _escape
 
 from flask import (Flask, Response, abort, flash, redirect, render_template,
                    request, send_from_directory, url_for)
 
 import db
 from parsers import parse_book
+
+__version__ = "0.2.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -81,6 +84,7 @@ def inject_globals():
         "nav_counts": counts, "current_tab": current_tab,
         "settings": db.get_settings(), "books": books,
         "popular": popular, "reading": reading,
+        "app_version": __version__,
     }
 
 
@@ -107,6 +111,36 @@ def preview(value, limit: int = 600) -> str:
     cut = text[:limit]
     sp = cut.rfind(" ")
     return (cut[:sp] if sp > 200 else cut).rstrip() + "…"
+
+
+def _hl_snippet(raw: str) -> str:
+    """Экранировать текст сниппета, сохранив маркеры подсветки из FTS."""
+    return _escape(raw).replace("\x01", "<mark>").replace("\x02", "</mark>")
+
+
+def _fts_query(q: str) -> str:
+    return " AND ".join(f'"{t}"' for t in re.findall(r"\w+", q, flags=re.UNICODE))
+
+
+def _search_chapters(conn, q: str, limit: int = 8):
+    """N1: полнотекстовый поиск по главам (FTS5) с контекстом."""
+    terms = _fts_query(q)
+    if not terms:
+        return []
+    try:
+        hits = conn.execute(
+            """SELECT c.id, c.title, b.title bt,
+                      snippet(chapters_fts, 1, char(1), char(2), '…', 16) snip
+               FROM chapters_fts
+               JOIN chapters c ON c.id = chapters_fts.rowid
+               JOIN books b ON b.id = c.book_id
+               WHERE chapters_fts MATCH ? LIMIT ?""",
+            (terms, limit),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    return [{"id": h["id"], "title": h["title"], "bt": h["bt"],
+             "snip": _hl_snippet(h["snip"])} for h in hits]
 
 
 def _render_feed(conn, order: str, page: int, q: str = "", per_page: int = 10):
@@ -145,6 +179,7 @@ def feed():
     q = request.args.get("q", "").strip()
     conn = get_db()
     try:
+        chapter_hits = _search_chapters(conn, q) if q else []
         if tab == "library":
             books = conn.execute(
                 "SELECT * FROM books WHERE title LIKE ? OR author LIKE ? ORDER BY id DESC",
@@ -157,7 +192,8 @@ def feed():
         conn.close()
     pages = max(1, (total + 9) // 10)
     return render_template(
-        "feed.html", rows=rows, tab=tab, page=page, pages=pages, q=q, total=total,
+        "feed.html", rows=rows, tab=tab, page=page, pages=pages, q=q,
+        total=total, chapter_hits=chapter_hits,
     )
 
 
@@ -198,10 +234,42 @@ def book_page(book_id: int):
                WHERE c.book_id = ?""",
             (book_id,),
         ).fetchone()
+        # M9: куда вести «Продолжить чтение»
+        resume = conn.execute(
+            """SELECT c.id FROM chapters c
+               JOIN state s ON s.chapter_id = c.id
+               WHERE c.book_id = ? AND s.done = 0 AND s.read_pct > 0
+               ORDER BY s.last_read_at DESC LIMIT 1""",
+            (book_id,),
+        ).fetchone()
+        resume_id = resume["id"] if resume else None
+        resume_label = "Продолжить чтение" if resume else ""
+        if resume_id is None:
+            nxt_unread = conn.execute(
+                """SELECT c.id FROM chapters c
+                   LEFT JOIN state s ON s.chapter_id = c.id
+                   WHERE c.book_id = ? AND COALESCE(s.done, 0) = 0
+                   ORDER BY c.ord LIMIT 1""",
+                (book_id,),
+            ).fetchone()
+            if nxt_unread:
+                resume_id = nxt_unread["id"]
+                resume_label = "Читать"
+            else:
+                first = conn.execute(
+                    "SELECT id FROM chapters WHERE book_id = ? ORDER BY ord LIMIT 1",
+                    (book_id,),
+                ).fetchone()
+                if first:
+                    resume_id = first["id"]
+                    resume_label = "Перечитать"
     finally:
         conn.close()
     pct_book = int(progress["done"] * 100 / progress["total"]) if progress["total"] else 0
-    return render_template("book.html", book=book, rows=rows, pct_book=pct_book)
+    return render_template(
+        "book.html", book=book, rows=rows, pct_book=pct_book,
+        resume_id=resume_id, resume_label=resume_label,
+    )
 
 
 # ---------------------------------------------------------------- story (chapter)
@@ -282,6 +350,16 @@ def add():
 
     conn = get_db()
     try:
+        # F4: дедупликация — та же книга уже в библиотеке
+        dup = conn.execute(
+            "SELECT id FROM books WHERE lower(title) = lower(?) AND lower(author) = lower(?)",
+            (parsed.title, parsed.author),
+        ).fetchone()
+        if dup:
+            os.remove(path)
+            flash(f"Книга «{parsed.title}» уже есть в библиотеке — добавление пропущено")
+            return redirect(url_for("book_page", book_id=dup["id"]))
+
         cur = conn.execute(
             """INSERT INTO books(title, author, cover, tags, description, created_at)
                VALUES(?,?,?,?,?,?)""",
@@ -317,11 +395,18 @@ def add():
                 html = html.replace(f"/media/images/{book_id}/{short}", f"/media/images/{book_id}/{target}")
             text = re.sub(r"<[^>]+>", "", html)
             words = len(text.split())
-            conn.execute(
+            cur = conn.execute(
                 """INSERT INTO chapters(book_id, ord, title, html, words, created_at)
                    VALUES(?,?,?,?,?,?)""",
                 (book_id, ord_, title, html, words, db.now()),
             )
+            try:
+                conn.execute(
+                    "INSERT INTO chapters_fts(rowid, title, content) VALUES (?,?,?)",
+                    (cur.lastrowid, title, db.strip_html(html)),
+                )
+            except sqlite3.OperationalError:
+                pass  # FTS появится после миграции init_db
         if cover_name:
             conn.execute("UPDATE books SET cover = ? WHERE id = ?", (cover_name, book_id))
         conn.commit()

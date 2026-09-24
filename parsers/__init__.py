@@ -54,6 +54,13 @@ def _clean_fragment(raw: bytes | str) -> etree._Element:
         if _tag_of(el) in DROP and el is not root:
             parent = el.getparent()
             if parent is not None:
+                idx = list(parent).index(el)
+                if el.tail:
+                    if idx > 0:
+                        prev = parent[idx - 1]
+                        prev.tail = (prev.tail or "") + el.tail
+                    else:
+                        parent.text = (parent.text or "") + el.tail
                 parent.remove(el)
 
     # pass 2: unwrap unknown tags, sanitize attributes
@@ -78,10 +85,24 @@ def _clean_fragment(raw: bytes | str) -> etree._Element:
             parent = el.getparent()
             if parent is None:
                 continue
+            # unwrap: содержимое (text + дети + tail) переходит на место тега
+            if el.text:
+                span = lhtml.Element("span")
+                span.text = el.text
+                el.insert(0, span)
             idx = list(parent).index(el)
-            for child in reversed(list(el)):
+            children = list(el)
+            for i, child in enumerate(children):
                 el.remove(child)
-                parent.insert(idx, child)
+                parent.insert(idx + i, child)
+            if children:
+                last = parent[idx + len(children) - 1]
+                last.tail = (last.tail or "") + (el.tail or "")
+            elif idx > 0:
+                prev = parent[idx - 1]
+                prev.tail = (prev.tail or "") + (el.tail or "")
+            else:
+                parent.text = (parent.text or "") + (el.tail or "")
             parent.remove(el)
 
     # unwrap the wrapper itself: hoist children out
@@ -169,6 +190,9 @@ def parse_epub(path: str) -> ParsedBook:
         item = book.get_item_with_id(idref)
         if item is None or item.get_type() == ITEM_NAVIGATION:
             continue
+        # EpubNav.get_type() -> ITEM_DOCUMENT, ловим по классу
+        if isinstance(item, epub.EpubNav):
+            continue
         if item.get_type() == ITEM_STYLE:
             continue
         if not item.get_name().lower().endswith((".xhtml", ".html", ".htm", ".xml")):
@@ -233,10 +257,12 @@ def parse_epub(path: str) -> ParsedBook:
         res.chapters[-1] = (t, h + "".join(pending_imgs))
         pending_imgs.clear()
 
-    # EPUB без spine-разбивки (один файл) — режем на куски по абзацам
+    # EPUB без spine-разбивки (один файл) — режем на куски по абзацам,
+    # но заголовок сохраняем, если нарезка не понадобилась
     if len(res.chapters) <= 1 and res.chapters:
         title, body = res.chapters[0]
-        res.chapters = _split_html(body, "Глава")
+        split = _split_html(body, "Глава")
+        res.chapters = split if len(split) > 1 else [(title, body)]
     return res
 
 
@@ -264,6 +290,113 @@ def _split_html(body: str, prefix: str, per: int = 3500) -> list:
         )
         out.append((f"{prefix} {i}", frag))
     return out
+
+
+def _esc_text(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def parse_pdf(path: str) -> ParsedBook:
+    """PDF: главы по заголовкам (эвристика по размеру/жирности шрифта),
+    иначе нарезка по ~4000 знаков. Обложка — рендер первой страницы."""
+    import os
+    import statistics
+
+    import pymupdf
+
+    res = ParsedBook()
+    doc = pymupdf.open(path)
+    try:
+        meta = doc.metadata or {}
+        res.title = (meta.get("title") or "").strip() or os.path.splitext(
+            os.path.basename(path)
+        )[0]
+        res.author = (meta.get("author") or "").strip() or "Неизвестный автор"
+
+        # обложка (F2): первая страница как JPEG
+        if doc.page_count:
+            try:
+                pix = doc[0].get_pixmap(matrix=pymupdf.Matrix(1.4, 1.4))
+                res.cover = pix.tobytes("jpeg")
+            except Exception:
+                pass
+
+        # блоки текста: (text, size, bold)
+        blocks: list[tuple[str, float, bool]] = []
+        for page in doc:
+            data = page.get_text("dict")
+            for blk in data.get("blocks", []):
+                if blk.get("type") != 0:
+                    continue
+                # каждая строка — отдельный блок (иначе абзацы
+                # склеиваются в один текст и нарезка не находит границ)
+                for line in blk.get("lines", []):
+                    spans = line.get("spans", [])
+                    t = "".join(s.get("text", "") for s in spans).strip()
+                    if not t:
+                        continue
+                    size = max((s.get("size", 0.0) for s in spans), default=0.0)
+                    bold = any(
+                        (s.get("flags", 0) & 16)
+                        or "bold" in s.get("font", "").lower()
+                        for s in spans
+                    )
+                    blocks.append((t, size, bold))
+    finally:
+        doc.close()
+
+    if not blocks:
+        return res
+
+    sizes_sorted = sorted(s for _, s, _ in blocks if s > 0)
+    med = statistics.median(sizes_sorted) if sizes_sorted else 12.0
+
+    def is_heading(text: str, size: float, bold: bool) -> bool:
+        if len(text) > 90 or len(text.split()) > 14:
+            return False
+        if text.endswith((".", ",", ";", ":", "…", "»")):
+            return False
+        if size >= med * 1.12 and (bold or size >= med * 1.25):
+            return True
+        return False
+
+    chapters: list = []
+    cur_title: str | None = None
+    cur_body: list[str] = []
+
+    def flush():
+        nonlocal cur_title, cur_body
+        if cur_title is None and not cur_body:
+            return
+        body = "".join(f"<p>{_esc_text(p)}</p>" for p in cur_body)
+        title = cur_title or f"Глава {len(chapters) + 1}"
+        if re.sub(r"<[^>]+>", "", body).strip():
+            chapters.append((title, body))
+        cur_title, cur_body = None, []
+
+    for text, size, bold in blocks:
+        if is_heading(text, size, bold):
+            flush()
+            cur_title = text
+        else:
+            cur_body.append(text)
+    flush()
+
+    # слишком мало заголовков — режем по абзацам
+    if len(chapters) < 2:
+        full = "".join(
+            f"<p>{_esc_text(t)}</p>" for t, s, b in blocks if not is_heading(t, s, b)
+        )
+        split = _split_html(full, "Глава", per=4000)
+        if len(split) > 1:
+            res.chapters = split
+        elif chapters:
+            res.chapters = chapters
+        elif full:
+            res.chapters = [("Глава 1", full)]
+    else:
+        res.chapters = chapters
+    return res
 
 
 def parse_fb2(path: str) -> ParsedBook:
@@ -504,10 +637,11 @@ def parse_fb2(path: str) -> ParsedBook:
     for i, sec in enumerate(sections, 1):
         res.chapters.extend(collect(sec, f"Глава {i}"))
 
-    # одна секция без разбивки — режем по абзацам
+    # одна секция без разбивки — режем по абзацам (если нарезка понадобилась)
     if len(res.chapters) <= 1 and res.chapters:
-        _, body_html = res.chapters[0]
-        res.chapters = _split_html(body_html, "Глава")
+        title, body_html = res.chapters[0]
+        split = _split_html(body_html, "Глава")
+        res.chapters = split if len(split) > 1 else [(title, body_html)]
 
     # подчистить итоговый html через ALLOWED-фильтр
     cleaned = []
@@ -519,8 +653,10 @@ def parse_fb2(path: str) -> ParsedBook:
 
 def parse_book(path: str) -> ParsedBook:
     lower = path.lower()
-    if lower.endswith((".epub",)):
+    if lower.endswith(".epub"):
         return parse_epub(path)
+    if lower.endswith(".pdf"):
+        return parse_pdf(path)
     if lower.endswith((".fb2", ".fb2.zip", ".zip")):
         return parse_fb2(path)
     raise ValueError(f"Неизвестный формат: {path}")

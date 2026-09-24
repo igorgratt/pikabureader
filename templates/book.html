@@ -18,6 +18,9 @@
     </div>
     {% if book.tags %}<div class="story-tags">{% for t in book.tags.split(',') %}<span class="tag">{{ t.strip() }}</span>{% endfor %}</div>{% endif %}
     <div class="community-actions">
+      {% if resume_id %}
+        <a class="foot-btn foot-btn-go" href="{{ url_for('story', chapter_id=resume_id) }}">▶ {{ resume_label }}</a>
+      {% endif %}
       <button class="foot-btn book-delete" data-book="{{ book.id }}" type="button">🗑 Удалить книгу</button>
     </div>
   </div>
