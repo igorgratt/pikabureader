@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Добавить книгу — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="add-box">
+  <h1>Добавить книгу</h1>
+  <p class="add-sub">Поддерживаются EPUB и FB2. Книга превратится в «сообщество», а главы — в «посты» ленты.</p>
+
+  <form class="dropzone" id="add-form" method="post" action="{{ url_for('add') }}" enctype="multipart/form-data">
+    <input type="file" name="file" id="file-input" accept=".epub,.fb2,.zip" hidden required>
+    <div class="dropzone-inner" id="dropzone">
+      <div class="dropzone-icon">📚</div>
+      <div class="dropzone-text">Перетащите файл сюда<br>или <span class="dropzone-link">выберите файл</span></div>
+      <div class="dropzone-hint">EPUB, FB2 · до 200 МБ</div>
+    </div>
+    <button class="btn btn-accent btn-big" type="submit" id="submit-btn" disabled>Загрузить</button>
+    <div class="upload-progress" id="upload-progress" hidden>
+      <div class="progress-bar progress-wide"><span class="progress-fill" id="upload-fill" style="width:0%"></span></div>
+      <span id="upload-label">Загрузка…</span>
+    </div>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  const input = document.getElementById('file-input');
+  const zone = document.getElementById('dropzone');
+  const btn = document.getElementById('submit-btn');
+  zone.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    if (input.files.length) {
+      zone.querySelector('.dropzone-text').innerHTML = input.files[0].name;
+      btn.disabled = false;
+    }
+  });
+  ['dragover','dragenter'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('is-drag'); }));
+  ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('is-drag'); }));
+  zone.addEventListener('drop', e => {
+    if (e.dataTransfer.files.length) { input.files = e.dataTransfer.files; input.dispatchEvent(new Event('change')); }
+  });
+</script>
+{% endblock %}

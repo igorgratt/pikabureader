@@ -1,0 +1,13 @@
+services:
+  pikabureader:
+    build: .
+    container_name: pikabureader
+    ports:
+      - "8000:8000"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8000
+      - FLASK_DEBUG=0
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

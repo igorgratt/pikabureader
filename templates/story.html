@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}{{ ch.title }} — {{ ch.book_title }} — PikaBuReader{% endblock %}
+
+{% block content %}
+<nav class="crumbs">
+  <a href="{{ url_for('book_page', book_id=ch.bid) }}">{{ ch.book_title }}</a>
+  <span>/</span>
+  <span>Глава {{ book_pos }} из {{ book_total }}</span>
+</nav>
+
+<article class="story-page" data-chapter="{{ ch.id }}">
+  <header class="story-head story-head-lg">
+    <a class="story-community" href="{{ url_for('book_page', book_id=ch.bid) }}">
+      {% if ch.cover %}
+        <img class="community-avatar" src="/covers/{{ ch.cover }}" alt="">
+      {% else %}
+        <span class="community-avatar community-avatar-fb">{{ ch.book_title[:1] }}</span>
+      {% endif %}
+      <span class="community-name">{{ ch.book_title }}</span>
+    </a>
+    <span class="story-meta">Глава {{ book_pos }} · {{ ch.author }}</span>
+    {% if ch.done %}<span class="badge badge-done">прочитано</span>{% elif ch.read_pct %}<span class="badge">{{ ch.read_pct | pct }}%</span>{% endif %}
+  </header>
+
+  <h1 class="story-title story-title-lg">{{ ch.title }}</h1>
+
+  <div class="story-tags story-tags-top">
+    <span class="tag">глава {{ book_pos }}</span>
+    <span class="tag">{{ ch.words }} слов</span>
+    {% if ch.tags %}{% for t in ch.tags.split(',')[:5] %}<span class="tag">{{ t.strip() }}</span>{% endfor %}{% endif %}
+  </div>
+
+  <div class="reader-tools">
+    <span class="reader-tools-label">Настройки:</span>
+    <select class="tool-select" data-set="font" title="Шрифт">
+      <option value="sans">Без засечек</option>
+      <option value="serif">С засечками</option>
+    </select>
+    <select class="tool-select" data-set="size" title="Размер">
+      <option value="16">16 px</option>
+      <option value="18">18 px</option>
+      <option value="20">20 px</option>
+      <option value="22">22 px</option>
+    </select>
+    <select class="tool-select" data-set="width" title="Ширина колонки">
+      <option value="narrow">Узкая</option>
+      <option value="normal">Средняя</option>
+      <option value="wide">Широкая</option>
+    </select>
+  </div>
+
+  <div class="reader" id="reader">
+    {{ ch.html | safe }}
+  </div>
+
+  <div class="story-nav">
+    {% if prev %}
+      <a class="story-nav-btn" href="{{ url_for('story', chapter_id=prev.id) }}">← {{ prev.title }}</a>
+    {% else %}<span></span>{% endif %}
+    <a class="story-nav-btn story-nav-center" href="{{ url_for('book_page', book_id=ch.bid) }}">Вся книга</a>
+    {% if nxt %}
+      <a class="story-nav-btn story-nav-next" href="{{ url_for('story', chapter_id=nxt.id) }}">{{ nxt.title }} →</a>
+    {% else %}<span></span>{% endif %}
+  </div>
+
+  <footer class="story-foot story-foot-lg">
+    <div class="rating" data-target="chapter" data-id="{{ ch.id }}">
+      <button class="rate-btn rate-up {{ 'is-active' if ch.rating > 0 }}" data-delta="1">▲</button>
+      <span class="rating-num {{ 'is-pos' if ch.rating > 0 else ('is-neg' if ch.rating < 0 else '') }}">{{ ch.rating | num }}</span>
+      <button class="rate-btn rate-down {{ 'is-active' if ch.rating < 0 }}" data-delta="-1">▼</button>
+    </div>
+    <button class="foot-btn bookmark-btn {{ 'is-active' if ch.bookmark }}" data-chapter="{{ ch.id }}" type="button">
+      {{ '🔖 в закладках' if ch.bookmark else '🔖 Сохранить' }}
+    </button>
+    <button class="foot-btn share-btn" data-url="{{ url_for('story', chapter_id=ch.id, _external=True) }}" type="button">↗ Поделиться</button>
+    <span class="foot-spacer"></span>
+    <label class="progress-label">Прогресс: <b id="pct-label">{{ ch.read_pct | pct }}%</b></label>
+    <button class="foot-btn {{ 'is-active' if not ch.done }}" id="mark-done" data-chapter="{{ ch.id }}" type="button">
+      {{ '✓ Прочитано' if ch.done else 'Отметить прочитанным' }}
+    </button>
+  </footer>
+</article>
+
+<section class="notes" id="notes">
+  <h2 class="notes-title">Заметки к главе</h2>
+  <form class="note-form" id="note-form" data-chapter="{{ ch.id }}">
+    <textarea class="note-input" id="note-text" rows="3" placeholder="Оставьте заметку к этой главе…" required></textarea>
+    <div class="note-form-foot">
+      <button class="btn btn-accent" type="submit">Отправить</button>
+      <span class="note-hint">Заметки видны только тебе</span>
+    </div>
+  </form>
+
+  <div class="notes-tree" id="notes-tree">
+    {% macro render_note(note, depth) %}
+    <div class="note {{ 'note-nested' if depth > 0 }}" data-note="{{ note.id }}">
+      <div class="note-head">
+        <span class="avatar-note">Я</span>
+        <b class="note-author">Ты</b>
+        <span class="note-time">{{ note.created_at }}</span>
+      </div>
+      <div class="note-text">{{ note.text }}</div>
+      <div class="note-foot">
+        <div class="rating rating-sm" data-target="note" data-id="{{ note.id }}">
+          <button class="rate-btn rate-up" data-delta="1">▲</button>
+          <span class="rating-num {{ 'is-pos' if note.rating > 0 else ('is-neg' if note.rating < 0 else '') }}">{{ note.rating | num }}</span>
+          <button class="rate-btn rate-down" data-delta="-1">▼</button>
+        </div>
+        <button class="note-reply" data-parent="{{ note.id }}" type="button">Ответить</button>
+        <button class="note-delete" data-note="{{ note.id }}" type="button">Удалить</button>
+      </div>
+      <div class="note-children">
+        {% for child in note.children %}{{ render_note(child, depth + 1) }}{% endfor %}
+      </div>
+    </div>
+    {% endmacro %}
+
+    {% for n in note_tree %}{{ render_note(n, 0) }}{% endfor %}
+    {% if not note_tree %}<div class="notes-empty">Заметок пока нет — будь первым.</div>{% endif %}
+  </div>
+</section>
+{% endblock %}

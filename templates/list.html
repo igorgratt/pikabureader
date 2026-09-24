@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}{{ heading }} — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="feed-head">
+  <h1>{{ heading }}</h1>
+  <div class="feed-sub">{{ rows | length }} глав</div>
+</div>
+
+{% for r in rows %}
+<article class="story-card" data-chapter="{{ r.id }}">
+  <header class="story-head">
+    <a class="story-community" href="{{ url_for('book_page', book_id=r.bid) }}">
+      {% if r.cover %}
+        <img class="community-avatar" src="/covers/{{ r.cover }}" alt="">
+      {% else %}
+        <span class="community-avatar community-avatar-fb">{{ r.book_title[:1] }}</span>
+      {% endif %}
+      <span class="community-name">{{ r.book_title }}</span>
+    </a>
+    <span class="story-meta">Глава {{ r.ord }} · {{ r.author }}</span>
+  </header>
+  <h2 class="story-title"><a href="{{ url_for('story', chapter_id=r.id) }}">{{ r.title }}</a></h2>
+  <div class="story-body"><p>{{ r.html | preview }}</p>
+    <a class="read-more" href="{{ url_for('story', chapter_id=r.id) }}">Читать далее</a>
+  </div>
+  <footer class="story-foot">
+    <div class="rating" data-target="chapter" data-id="{{ r.id }}">
+      <button class="rate-btn rate-up" data-delta="1">▲</button>
+      <span class="rating-num {{ 'is-pos' if r.rating > 0 else ('is-neg' if r.rating < 0 else '') }}">{{ r.rating | num }}</span>
+      <button class="rate-btn rate-down" data-delta="-1">▼</button>
+    </div>
+    <button class="foot-btn bookmark-btn is-active" data-chapter="{{ r.id }}" type="button">🔖 в закладках</button>
+  </footer>
+</article>
+{% else %}
+  <div class="empty-state"><p>Нет сохранённых закладок.</p></div>
+{% endfor %}
+{% endblock %}

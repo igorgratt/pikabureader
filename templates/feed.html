@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ {'hot':'Горячее','new':'Новое','library':'Библиотека','reading':'Сейчас читаю'}.get(tab, 'Лента') }} — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="feed-head">
+  <h1>{{ {'hot':'Горячее','new':'Новое','library':'Библиотека','reading':'Сейчас читаю'}.get(tab, 'Лента') }}</h1>
+  <div class="feed-sub">{{ total }} глав · {{ nav_counts.books }} книг</div>
+</div>
+
+{% if tab == 'reading' %}
+  <div class="subtabs">
+    <a class="subtab" href="{{ url_for('feed', t='new') }}">Все главы</a>
+    <span class="subtab is-active">Сейчас читаю</span>
+  </div>
+{% endif %}
+
+{% for r in rows %}
+<article class="story-card" data-chapter="{{ r.id }}">
+  <header class="story-head">
+    <a class="story-community" href="{{ url_for('book_page', book_id=r.bid) }}">
+      {% if r.cover %}
+        <img class="community-avatar" src="/covers/{{ r.cover }}" alt="">
+      {% else %}
+        <span class="community-avatar community-avatar-fb">{{ r.book_title[:1] }}</span>
+      {% endif %}
+      <span class="community-name">{{ r.book_title }}</span>
+    </a>
+    <span class="story-meta">Глава {{ r.ord }} · {{ r.author }}</span>
+    {% if r.done %}<span class="badge badge-done">прочитано</span>{% elif r.read_pct %}<span class="badge">{{ r.read_pct | pct }}%</span>{% endif %}
+  </header>
+
+  <h2 class="story-title"><a href="{{ url_for('story', chapter_id=r.id) }}">{{ r.title }}</a></h2>
+
+  <div class="story-body">
+    <p>{{ r.html | preview }}</p>
+    <a class="read-more" href="{{ url_for('story', chapter_id=r.id) }}">Читать далее</a>
+  </div>
+
+  <footer class="story-foot">
+    <div class="rating" data-target="chapter" data-id="{{ r.id }}">
+      <button class="rate-btn rate-up {{ 'is-active' if r.rating > 0 }}" data-delta="1" title="Нравится">▲</button>
+      <span class="rating-num {{ 'is-pos' if r.rating > 0 else ('is-neg' if r.rating < 0 else '') }}">{{ r.rating | num }}</span>
+      <button class="rate-btn rate-down {{ 'is-active' if r.rating < 0 }}" data-delta="-1" title="Не нравится">▼</button>
+    </div>
+    <a class="foot-btn" href="{{ url_for('story', chapter_id=r.id) }}#notes">💬 {{ r.note_count | num }} заметок</a>
+    <button class="foot-btn bookmark-btn {{ 'is-active' if r.bookmark }}" data-chapter="{{ r.id }}" type="button">
+      {{ '🔖 в закладках' if r.bookmark else '🔖 Сохранить' }}
+    </button>
+    <button class="foot-btn share-btn" data-url="{{ url_for('story', chapter_id=r.id, _external=True) }}" type="button">↗ Поделиться</button>
+    <span class="foot-spacer"></span>
+    <span class="foot-words">{{ r.words }} слов</span>
+  </footer>
+
+  <div class="story-tags">
+    {% if r.book_title %}<a class="tag" href="{{ url_for('book_page', book_id=r.bid) }}">{{ r.book_title }}</a>{% endif %}
+    {% if r.tags %}{% for t in r.tags.split(',')[:5] %}<span class="tag">{{ t.strip() }}</span>{% endfor %}{% endif %}
+  </div>
+</article>
+{% else %}
+  <div class="empty-state">
+    <p>Здесь пока пусто.</p>
+    <a class="btn btn-accent" href="{{ url_for('add') }}">+ Добавить книгу</a>
+  </div>
+{% endfor %}
+
+{% if pages > 1 %}
+<nav class="pager">
+  {% if page > 1 %}<a class="page-link" href="{{ url_for('feed', t=tab, p=page-1, q=q) }}">← Назад</a>{% endif %}
+  {% for p in range(1, pages + 1) %}
+    {% if p == page %}<span class="page-link is-active">{{ p }}</span>
+    {% elif p <= 3 or p > pages - 2 or (p - page) | abs <= 1 %}
+      <a class="page-link" href="{{ url_for('feed', t=tab, p=p, q=q) }}">{{ p }}</a>
+    {% elif (p - page) | abs == 2 %}<span class="page-dots">…</span>{% endif %}
+  {% endfor %}
+  {% if page < pages %}<a class="page-link" href="{{ url_for('feed', t=tab, p=page+1, q=q) }}">Вперёд →</a>{% endif %}
+</nav>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="{{ settings.get('theme', 'light') }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}PikaBuReader{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/pikabu.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="logo" href="{{ url_for('feed') }}"><span class="logo-mark">P</span>ikaBuReader</a>
+      <nav class="tabs">
+        <a class="tab {{ 'is-active' if current_tab == 'hot' }}" href="{{ url_for('feed', t='hot') }}">Горячее</a>
+        <a class="tab {{ 'is-active' if current_tab == 'new' }}" href="{{ url_for('feed', t='new') }}">Новое</a>
+        <a class="tab {{ 'is-active' if current_tab == 'library' }}" href="{{ url_for('feed', t='library') }}">Библиотека <span class="pill">{{ nav_counts.books }}</span></a>
+      </nav>
+      <form class="search" action="{{ url_for('feed') }}" method="get">
+        <input type="search" name="q" placeholder="Найти книгу" value="{{ request.args.get('q', '') }}">
+      </form>
+      <a class="btn btn-accent" href="{{ url_for('add') }}">+ Добавить книгу</a>
+      <button class="icon-btn" id="theme-toggle" title="Сменить тему" type="button">◐</button>
+      <div class="avatar-me">Я</div>
+    </div>
+  </header>
+
+  <div class="layout">
+    <aside class="sidebar sidebar-left">
+      <nav class="side-menu">
+        <a href="{{ url_for('feed', t='new') }}">📚 Все главы <span class="side-count">{{ nav_counts.feed }}</span></a>
+        <a href="{{ url_for('feed', t='library') }}">📖 Мои книги <span class="side-count">{{ nav_counts.books }}</span></a>
+        <a href="{{ url_for('bookmarks') }}">🔖 Закладки <span class="side-count">{{ nav_counts.bookmarks }}</span></a>
+        <a href="{{ url_for('feed', t='reading') }}">⏳ Сейчас читаю <span class="side-count">{{ nav_counts.reading }}</span></a>
+      </nav>
+      <div class="side-card">
+        <div class="side-card-title">Темы книг</div>
+        <div class="side-tags">
+          {% for b in books %}{% if b.tags %}
+            <span class="tag">{{ b.tags.split(',')[0] }}</span>
+          {% endif %}{% endfor %}
+        </div>
+      </div>
+      <div class="side-footer">Локальная читалка в стиле Pikabu</div>
+    </aside>
+
+    <main class="content">
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+
+    <aside class="sidebar sidebar-right">
+      <div class="side-card">
+        <div class="side-card-title">Мои книги</div>
+        {% if books %}
+          {% for b in books %}
+          <a class="mini-book" href="{{ url_for('book_page', book_id=b.id) }}">
+            {% if b.cover %}<img src="/covers/{{ b.cover }}" alt="">{% else %}<span class="mini-cover-fb">{{ b.title[:1] }}</span>{% endif %}
+            <span class="mini-book-t"><b>{{ b.title }}</b><i>{{ b.author }}</i></span>
+          </a>
+          {% endfor %}
+        {% else %}
+          <div class="side-empty">Пока пусто — <a href="{{ url_for('add') }}">добавьте книгу</a></div>
+        {% endif %}
+      </div>
+
+      {% if reading %}
+      <div class="side-card">
+        <div class="side-card-title">Продолжить чтение</div>
+        {% for r in reading %}
+        <a class="side-link" href="{{ url_for('story', chapter_id=r.id) }}">
+          <span class="side-link-t">{{ r.title }}</span>
+          <span class="progress-bar"><span class="progress-fill" style="width:{{ r.read_pct | pct }}%"></span></span>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if popular %}
+      <div class="side-card">
+        <div class="side-card-title">Горячее</div>
+        {% for p in popular %}
+        <a class="side-link side-link-hot" href="{{ url_for('story', chapter_id=p.id) }}">
+          <span class="hot-rank">{{ p.rating | num }}</span>
+          <span class="side-link-t">{{ p.title }}<i>{{ p.bt }}</i></span>
+        </a>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </aside>
+  </div>
+
+  <script>
+    window.READER = { settings: {{ settings | tojson }} };
+  </script>
+  <script src="{{ url_for('static', filename='js/reader.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
