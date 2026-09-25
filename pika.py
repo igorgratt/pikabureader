@@ -155,7 +155,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8000")))
     s.set_defaults(func=cmd_serve)
 
-    i = sub.add_parser("import", help="импортировать книги (EPUB/FB2/PDF)")
+    i = sub.add_parser("import", help="импортировать книги (EPUB/FB2/PDF/TXT/MD)")
     i.add_argument("files", nargs="+", metavar="FILE")
     i.add_argument("--split", choices=("parts", "compact", "merge"),
                    default="parts", help="режим разбивки глав (F9)")

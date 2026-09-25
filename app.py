@@ -18,7 +18,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.9.1"
+__version__ = "0.10.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -637,11 +637,24 @@ SPLIT_MODES = {
 
 
 def _save_upload(file) -> str:
-    filename = re.sub(r"[^\w.\-]+", "_", file.filename)
-    os.makedirs(UPLOAD_DIR, exist_ok=True)
-    path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex[:8]}_{filename}")
+    filename = re.sub(r"[^\w.\-]+", "_", file.filename) or "file"
+    # отдельный подкаталог на каждый импорт: базовое имя файла остаётся
+    # чистым (заголовок PDF/TXT — имя файла, иначе в нём был бы hex-префикс),
+    # картинки рядом с FB2 не подхватывают чужие загрузки
+    folder = os.path.join(UPLOAD_DIR, uuid.uuid4().hex[:8])
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, filename)
     file.save(path)
     return path
+
+
+def _discard_upload(path: str) -> None:
+    """Убрать неудачную загрузку вместе с её подкаталогом."""
+    try:
+        os.remove(path)
+        os.rmdir(os.path.dirname(path))
+    except OSError:
+        pass
 
 
 def _import_error(exc: Exception, filename: str) -> dict:
@@ -649,7 +662,9 @@ def _import_error(exc: Exception, filename: str) -> dict:
     msg = str(exc).strip() or exc.__class__.__name__
     low = msg.lower()
     if "неизвестный формат" in low:
-        kind, hint = "Формат не поддерживается", "Нужен EPUB, FB2 (или fb2.zip) либо PDF"
+        kind, hint = "Формат не поддерживается", "Нужен EPUB, FB2 (или fb2.zip), PDF, TXT либо Markdown"
+    elif "пуст" in low and "файл" in low:
+        kind, hint = "Пустой файл", "В файле нет текста"
     elif isinstance(exc, zipfile.BadZipFile) or "zip" in low:
         kind, hint = "Файл повреждён", "Не открывается как архив — проверьте файл на источнике"
     elif "not a zip" in low or isinstance(exc, UnicodeDecodeError):
@@ -795,10 +810,7 @@ def _import_one(file, mode: str = "parts") -> dict:
     try:
         parsed = parse_book(path)
     except Exception as exc:  # noqa: BLE001
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        _discard_upload(path)
         return _import_error(exc, filename)
     if mode in ("compact", "merge"):
         chapters, sources = _apply_split_mode(parsed.chapters, mode, parsed.sources)
@@ -807,10 +819,7 @@ def _import_one(file, mode: str = "parts") -> dict:
     result = _store_book(parsed, chapters, sources)
     result["file"] = filename
     if result["status"] != "ok":
-        try:
-            os.remove(path)
-        except OSError:
-            pass
+        _discard_upload(path)
     return result
 
 

@@ -4,7 +4,7 @@
 {% block content %}
 <div class="add-box">
   <h1>Добавить книгу</h1>
-  <p class="add-sub">Поддерживаются EPUB, FB2 и PDF — можно выбрать несколько файлов сразу. Книга превратится в «сообщество», а главы — в «посты» ленты.</p>
+  <p class="add-sub">Поддерживаются EPUB, FB2, PDF, TXT и Markdown — можно выбрать несколько файлов сразу. Книга превратится в «сообщество», а главы — в «посты» ленты.</p>
 
   {% if results %}
   <section class="settings-card import-results">
@@ -28,11 +28,11 @@
   {% endif %}
 
   <form class="dropzone" id="add-form" method="post" action="{{ url_for('add') }}" enctype="multipart/form-data">
-    <input type="file" name="file" id="file-input" accept=".epub,.fb2,.zip,.pdf" multiple hidden required>
+    <input type="file" name="file" id="file-input" accept=".epub,.fb2,.zip,.pdf,.txt,.md" multiple hidden required>
     <div class="dropzone-inner" id="dropzone">
       <div class="dropzone-icon">📚</div>
       <div class="dropzone-text">Перетащите файлы сюда<br>или <span class="dropzone-link">выберите файлы</span></div>
-      <div class="dropzone-hint">EPUB, FB2, PDF · несколько файлов · до 200 МБ</div>
+      <div class="dropzone-hint">EPUB, FB2, PDF, TXT/MD · несколько файлов · до 200 МБ</div>
     </div>
     <div class="dropzone-actions">
       <button class="btn btn-accent btn-big" type="submit" id="submit-btn" disabled>Загрузить</button>

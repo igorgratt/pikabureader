@@ -11,6 +11,7 @@ from parsers import (
     parse_book,
     parse_epub,
     parse_fb2,
+    parse_txt,
 )
 
 NS_FB21 = "http://www.gribuser.ru/xml/fb2.1"
@@ -280,7 +281,7 @@ def test_epub_single_doc_split(tmp_path):
 
 
 def test_parse_book_dispatch(tmp_path):
-    p = tmp_path / "x.txt"
+    p = tmp_path / "x.docx"
     p.write_text("hi")
     with pytest.raises(ValueError):
         parse_book(str(p))
@@ -434,6 +435,76 @@ def test_epub_sources_align_with_chapters(tmp_path):
     assert 'href="ch2.xhtml#to-second"' in res.chapters[0][1]
     # якорь во второй главе сохранён
     assert 'id="to-second"' in res.chapters[1][1]
+
+
+# ---------------------------------------------------------------- F6: txt/markdown
+
+def test_parse_txt_by_headers(tmp_path):
+    p = tmp_path / "notes.md"
+    p.write_text(
+        "# Первая глава\nАбзац один.\n\nВторой абзац.\n\n"
+        "## Вторая глава\nВторой текст.\n\n### Вложенная внутри\nпосле х3.",
+        encoding="utf-8",
+    )
+    res = parse_txt(str(p))
+    assert res.title == "notes"
+    assert [t for t, _ in res.chapters] == ["Первая глава", "Вторая глава"]
+    assert "Абзац один" in res.chapters[0][1]
+    assert "Второй абзац" in res.chapters[0][1]
+    # вложенная ### не делит главу, остаётся заголовком внутри
+    assert "<h3>Вложенная внутри</h3>" in res.chapters[1][1]
+    assert "после х3" in res.chapters[1][1]
+
+
+def test_parse_txt_intro_and_inline(tmp_path):
+    p = tmp_path / "a.txt"
+    p.write_text(
+        "Вступительный абзац.\n\n# Раздел\n**жирный**, *курсив* и <b>сырой</b>",
+        encoding="utf-8",
+    )
+    res = parse_txt(str(p))
+    assert res.chapters[0][0] == "Раздел"
+    # текст до первого заголовка приклеен к первой главе
+    assert "Вступительный абзац" in res.chapters[0][1]
+    assert "<strong>жирный</strong>" in res.chapters[0][1]
+    assert "<em>курсив</em>" in res.chapters[0][1]
+    # сырой HTML — экранирован, не выполнен
+    assert "<b>" not in res.chapters[0][1]
+    assert "&lt;b&gt;сырой&lt;/b&gt;" in res.chapters[0][1]
+
+
+def test_parse_txt_cp1251(tmp_path):
+    p = tmp_path / "cp.txt"
+    p.write_bytes("Привет из 1251.\n\nВторой абзац.".encode("windows-1251"))
+    res = parse_txt(str(p))
+    assert "Привет из 1251" in res.chapters[0][1]
+
+
+def test_parse_txt_no_headers_splits_long(tmp_path):
+    paras = "\n\n".join(
+        "Абзац: довольно длинный текст со множеством слов, который нужно "
+        "разбить на несколько глав для удобного чтения. " * 25
+        for _ in range(12)
+    )
+    assert len(paras) > 12000
+    p = tmp_path / "long.txt"
+    p.write_text(paras, encoding="utf-8")
+    res = parse_txt(str(p))
+    assert len(res.chapters) > 1
+
+
+def test_parse_txt_empty_raises(tmp_path):
+    p = tmp_path / "empty.txt"
+    p.write_text("   \n\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="пуст"):
+        parse_txt(str(p))
+
+
+def test_parse_book_dispatch_txt(tmp_path):
+    p = tmp_path / "book.md"
+    p.write_text("# Раздел\nтекст", encoding="utf-8")
+    res = parse_book(str(p))
+    assert res.chapters and res.chapters[0][0] == "Раздел"
 
 
 # ---------------------------------------------------------------- security: схемы URL

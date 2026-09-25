@@ -684,12 +684,93 @@ def parse_fb2(path: str) -> ParsedBook:
     return res
 
 
+def parse_txt(path: str) -> ParsedBook:
+    """TXT/Markdown (F6): главы по заголовкам `#`/`##`, без них — весь файл
+    одной главой (длинный — нарезка по абзацам). Кодировка: UTF-8 (BOM ок),
+    затем windows-1251, как у FB2."""
+    import os
+
+    res = ParsedBook()
+    res.title = os.path.splitext(os.path.basename(path))[0]
+    res.author = "Неизвестный автор"
+
+    with open(path, "rb") as f:
+        raw = f.read()
+    text = None
+    for enc in ("utf-8-sig", "windows-1251"):
+        try:
+            text = raw.decode(enc)
+            break
+        except UnicodeDecodeError:
+            continue
+    if text is None:
+        text = raw.decode("utf-8", errors="replace")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    if not text.strip():
+        raise ValueError("Файл пустой")
+
+    heads = list(re.finditer(r"^(#{1,2})[ \t]+(.+)$", text, flags=re.M))
+    if heads:
+        intro = text[: heads[0].start()]
+        for i, m in enumerate(heads):
+            end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+            content = text[m.end():end]
+            if i == 0 and intro.strip():
+                content = intro + "\n\n" + content
+            html = _clean_html(_md_blocks(content))
+            if html:
+                res.chapters.append((m.group(2).strip(), html))
+        if len(res.chapters) == 1 and len(res.chapters[0][1]) > 8000:
+            res.chapters = _split_html(res.chapters[0][1], "Глава", per=4000)
+    else:
+        html = _clean_html(_md_blocks(text))
+        if len(text) > 12000:
+            res.chapters = _split_html(html, "Глава", per=4000)
+        else:
+            res.chapters = [(res.title, html)]
+    return res
+
+
+def _esc_md(s: str) -> str:
+    return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _md_inline(s: str) -> str:
+    """Инлайн-Markdown после экранирования: **жирный**, *курсив*."""
+    s = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", s)
+    s = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<em>\1</em>", s)
+    return s
+
+
+def _md_blocks(body: str) -> str:
+    """Абзацы по пустым строкам, строки-заголовки `###` и глубже — h3..h6.
+    Переносы строк внутри абзаца склеиваются (txt обычно с переносом строк)."""
+    out: list[str] = []
+    for block in re.split(r"\n[ \t]*\n", body):
+        if not block.strip():
+            continue
+        lines = [ln for ln in block.split("\n") if ln.strip()]
+        head = re.match(r"^(#{1,6})[ \t]+(.+)$", lines[0])
+        lvl = 0
+        if head:
+            lvl = len(head.group(1))
+            lines = lines[1:]
+        text = " ".join(ln.strip() for ln in lines)
+        if head:
+            out.append(f"<h{lvl}>{_esc_md(head.group(2).strip())}</h{lvl}>")
+        if text:
+            out.append(f"<p>{_md_inline(_esc_md(text))}</p>")
+    return "".join(out)
+
+
 def parse_book(path: str) -> ParsedBook:
     lower = path.lower()
     if lower.endswith(".epub"):
         return parse_epub(path)
     if lower.endswith(".pdf"):
         return parse_pdf(path)
+    if lower.endswith((".txt", ".md", ".markdown")):
+        return parse_txt(path)
     if lower.endswith((".fb2", ".fb2.zip", ".zip")):
         return parse_fb2(path)
     raise ValueError(f"Неизвестный формат: {path}")

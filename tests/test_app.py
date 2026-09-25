@@ -486,7 +486,7 @@ def test_add_error_shows_card(client):
     """F5: ошибка импорта — понятная карточка, а не мелкий flash."""
     r = client.post(
         "/add",
-        data={"file": (io.BytesIO(b"plain text"), "note.txt")},
+        data={"file": (io.BytesIO(b"plain text"), "note.docx")},
         content_type="multipart/form-data",
         follow_redirects=True,
     )
@@ -508,6 +508,41 @@ def test_add_duplicate_reports_card(client):
     page = r.get_data(as_text=True)
     assert "Уже в библиотеке" in page
     assert "Открыть существующую" in page
+
+
+def test_add_txt_markdown_import(client):
+    """F6: .txt/.md импортируются, главы по заголовкам # / ##."""
+    content = "# Раздел первый\nПривет, текст-абзац.\n\n## Раздел второй\nЕщё текст."
+    r = client.post(
+        "/add",
+        data={"file": (io.BytesIO(content.encode("utf-8")), "заметки.md")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    page = r.get_data(as_text=True)
+    assert "Результаты импорта" in page
+    assert "import-badge-ok" in page
+
+    conn = db.connect()
+    try:
+        row = conn.execute("SELECT id, title FROM books").fetchone()
+    finally:
+        conn.close()
+    assert row is not None and row["title"] == "заметки"
+    book = client.get(f"/book/{row['id']}").get_data(as_text=True)
+    assert "Раздел первый" in book and "Раздел второй" in book
+
+
+def test_add_empty_txt_shows_card(client):
+    """F6/F5: пустой txt — понятная карточка «Пустой файл»."""
+    r = client.post(
+        "/add",
+        data={"file": (io.BytesIO("   \n\n".encode()), "empty.txt")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    page = r.get_data(as_text=True)
+    assert "Пустой файл" in page
 
 
 # ---------------------------------------------------------------- F9: предпросмотр
