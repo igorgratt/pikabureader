@@ -2,7 +2,7 @@
 
 Локальная читалка для электронных книг в формате ленты Pikabu: книга — «сообщество», глава — «пост», заметки — «комментарии», оценки глав — «плюсы/минусы».
 
-**Версия:** `0.7.2` — см. [CHANGELOG.md](CHANGELOG.md); версии отмечены тегами `vX.Y.Z` в git.
+**Версия:** `0.8.0` — см. [CHANGELOG.md](CHANGELOG.md); версии отмечены тегами `vX.Y.Z` в git.
 
 ## Возможности
 
@@ -29,6 +29,19 @@ python app.py
 ```
 
 Открыть http://127.0.0.1:8000
+
+### CLI (без браузера)
+
+```bash
+python pika.py serve --port 8000        # то же, что python app.py
+python pika.py import book.epub report.fb2 --split compact
+python pika.py list --json              # список книг для скриптов
+python pika.py stats                    # версия, схема, счётчики, размер data/
+python pika.py backup data-backup.zip   # бэкап data/ в zip
+```
+
+Коды возврата: 0 — успех, 1 — ошибка, 2 — неверные аргументы.
+Подробности — `python pika.py --help`.
 
 ### Пароль и читатели
 
@@ -83,7 +96,7 @@ data/             # база, обложки, картинки, загружен
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest tests/ -q    # 84 теста
+python -m pytest tests/ -q    # 92 теста
 ```
 
 Та же проверка гоняется в CI (GitHub Actions) на каждый push и pull request.

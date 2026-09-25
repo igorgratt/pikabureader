@@ -22,7 +22,7 @@ jobs:
           pip install -r requirements.txt -r requirements-dev.txt
 
       - name: Lint (pyflakes)
-        run: python -m pyflakes app.py db.py parsers tests
+        run: python -m pyflakes app.py db.py parsers pika.py tests
 
       - name: Tests (pytest)
         run: python -m pytest tests/ -q

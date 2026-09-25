@@ -17,6 +17,7 @@
 ```
 pikabureader/
 ├── app.py               # Flask-приложение: роуты, JSON API, импорт книг
+├── pika.py              # CLI: serve / import / list / stats / backup (--json)
 ├── db.py                # схема SQLite, подключение, настройки
 ├── parsers/
 │   └── __init__.py      # ParsedBook, парсеры EPUB/FB2, санитайзер HTML

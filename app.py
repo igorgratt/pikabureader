@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import io
 import json
 import os
 import posixpath
@@ -17,7 +18,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.7.2"
+__version__ = "0.8.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -781,8 +782,9 @@ def _store_book(parsed, chapters, sources: list | None = None) -> dict:
         conn.close()
 
 
-def _import_one(file) -> dict:
-    """Импорт одного файла: сохраняет, парсит, сохраняет в БД (F3/F5)."""
+def _import_one(file, mode: str = "parts") -> dict:
+    """Импорт одного файла: сохраняет, парсит, сохраняет в БД (F3/F5/F9).
+    mode — режим разбивки глав (parts/compact/merge), как в предпросмотре."""
     filename = re.sub(r"[^\w.\-]+", "_", file.filename) or "file"
     path = _save_upload(file)
     try:
@@ -793,7 +795,11 @@ def _import_one(file) -> dict:
         except OSError:
             pass
         return _import_error(exc, filename)
-    result = _store_book(parsed, parsed.chapters)
+    if mode in ("compact", "merge"):
+        chapters, sources = _apply_split_mode(parsed.chapters, mode, parsed.sources)
+    else:
+        chapters, sources = parsed.chapters, None
+    result = _store_book(parsed, chapters, sources)
     result["file"] = filename
     if result["status"] != "ok":
         try:
@@ -1267,25 +1273,27 @@ def settings_page():
     )
 
 
-@app.get("/api/backup.zip")
-def backup_download():
-    """M4: экспорт data/ (база, картинки, обложки) в zip."""
-    import io
-    import zipfile
-    from datetime import datetime, timezone
-
-    if not os.path.exists(db.DB_PATH):
-        abort(404)
+def _backup_zip_bytes() -> bytes:
+    """M4: содержимое data/ в zip — используется в /api/backup.zip и CLI."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for root, _, files in os.walk(db.DATA_DIR):
             for f in files:
                 p = os.path.join(root, f)
                 zf.write(p, os.path.relpath(p, db.DATA_DIR))
-    buf.seek(0)
+    return buf.getvalue()
+
+
+@app.get("/api/backup.zip")
+def backup_download():
+    """M4: экспорт data/ (база, картинки, обложки) в zip."""
+    from datetime import datetime, timezone
+
+    if not os.path.exists(db.DB_PATH):
+        abort(404)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M")
     return send_file(
-        buf, mimetype="application/zip", as_attachment=True,
+        io.BytesIO(_backup_zip_bytes()), mimetype="application/zip", as_attachment=True,
         download_name=f"pikabureader-backup-{stamp}.zip",
     )
 
