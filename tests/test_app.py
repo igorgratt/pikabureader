@@ -77,6 +77,26 @@ def test_note_empty_rejected(client):
     assert r.status_code == 400
 
 
+# ---------------------------------------------------------------- R6
+
+def test_api_chapter_full_text(client):
+    cid = seed()
+    r = client.post("/api/chapter", json={"chapter_id": cid})
+    assert r.status_code == 200
+    res = r.get_json()
+    assert res["ok"] and "Текст главы для чтения" in res["html"]
+
+
+def test_api_chapter_bad_payload(client):
+    cid = seed()
+    assert client.post("/api/chapter", json={}).status_code == 400
+    assert client.post("/api/chapter", json={"chapter_id": 0}).status_code == 400
+    assert (
+        client.post("/api/chapter", json={"chapter_id": cid + 9999}).status_code
+        == 400
+    )
+
+
 # ---------------------------------------------------------------- N3
 
 def test_story_has_toc(client):

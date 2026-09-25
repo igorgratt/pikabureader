@@ -77,6 +77,7 @@ settings(key PK, value)   -- theme, font, size, width
 | Путь | Тело | Что делает |
 |---|---|---|
 | `/api/rate` | `{target: "chapter"\|"note", id, delta: 1\|-1}` | Оценка главы или заметки |
+| `/api/chapter` | `{chapter_id}` | Полный HTML главы — «Читать далее» разворачивает карточку в ленте (R6) |
 | `/api/progress` | `{chapter_id, pct, done?}` | Позиция чтения (`read_pct = MAX(...)`) |
 | `/api/bookmark` | `{chapter_id}` | Переключает закладку, возвращает новое состояние |
 | `/api/note` | `{chapter_id, parent_id?, text}` | Создаёт заметку/ответ, возвращает запись |

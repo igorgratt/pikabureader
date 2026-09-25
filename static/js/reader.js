@@ -607,4 +607,29 @@
       }
     }
   });
+
+  // ------------------------------------------------ R6: читать далее в ленте
+  document.querySelectorAll(".read-more[data-chapter]").forEach((a) => {
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      if (a.dataset.loading) return;
+      a.dataset.loading = "1";
+      const body = a.parentElement;
+      const href = a.getAttribute("href");
+      post("/api/chapter", { chapter_id: a.dataset.chapter })
+        .then((res) => {
+          if (!res.ok) throw new Error(res.error || "error");
+          body.innerHTML = res.html;
+          const pageLink = document.createElement("a");
+          pageLink.className = "read-more read-more-page";
+          pageLink.href = href;
+          pageLink.textContent = "Открыть страницу главы →";
+          body.appendChild(pageLink);
+        })
+        .catch(() => {
+          delete a.dataset.loading;
+          a.textContent = "Читать далее";
+        });
+    });
+  });
 })();

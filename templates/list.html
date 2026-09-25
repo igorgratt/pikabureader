@@ -25,7 +25,7 @@
     <blockquote class="bookmark-quote">{{ r.bookmark_quote }}</blockquote>
   {% endif %}
   <div class="story-body"><p>{{ r.html | preview }}</p>
-    <a class="read-more" href="{{ url_for('story', chapter_id=r.id) }}">Читать далее</a>
+    <a class="read-more" href="{{ url_for('story', chapter_id=r.id) }}" data-chapter="{{ r.id }}">Читать далее</a>
   </div>
   <footer class="story-foot">
     <div class="rating" data-target="chapter" data-id="{{ r.id }}">

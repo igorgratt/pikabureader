@@ -17,7 +17,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -1025,6 +1025,24 @@ def api_rate():
     if agg is None:
         raise ValueError("not found")
     return {"ok": True, "rating": agg["rating"], "mine": mine}
+
+
+@app.post("/api/chapter")
+@json_api
+def api_chapter():
+    """R6: полный текст главы для «Читать далее» в ленте."""
+    payload = request.get_json(force=True)
+    cid = int(payload.get("chapter_id", 0))
+    if cid <= 0:
+        raise ValueError("bad payload")
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT html FROM chapters WHERE id = ?", (cid,)).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise ValueError("not found")
+    return {"ok": True, "html": row["html"]}
 
 
 @app.post("/api/progress")

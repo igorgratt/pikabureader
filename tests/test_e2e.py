@@ -68,6 +68,13 @@ def test_e2e_import_feed_story_note(server, tmp_path):
             card = page.locator(".story-card").first
             card.wait_for(state="visible", timeout=10000)
             assert page.locator(".story-card").count() >= 1
+
+            # R6: «Читать далее» разворачивает карточку на месте, без перехода
+            card.locator(".read-more").click()
+            page.wait_for_selector(".story-body .read-more-page", timeout=10000)
+            assert page.url.rstrip("/") == server.rstrip("/")
+            assert "абзац истории" in card.locator(".story-body").inner_text()
+
             card_title = card.locator(".story-title a").inner_text().strip()
             card.locator(".story-title a").click()
             page.wait_for_url("**/story/**", timeout=10000)
