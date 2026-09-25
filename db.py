@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS settings (
 # ключ = номер версии, значение = SQL-скрипт апгрейда. Порядок применяется
 # по возрастанию, каждая миграция выполняется транзакционно и поднимает
 # PRAGMA user_version. SCHEMA — только для создания новой базы с нуля.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 MIGRATIONS: dict[int, str] = {
     2: """
@@ -129,6 +129,16 @@ MIGRATIONS: dict[int, str] = {
         chapter_id INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
         words INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (profile_id, day, chapter_id)
+    );
+    """,
+    # 9: D7 — публикация книги по ссылке (read-only, токен)
+    9: """
+    CREATE TABLE IF NOT EXISTS share_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        token TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        expires_at TEXT
     );
     """,
 }

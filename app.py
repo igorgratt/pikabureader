@@ -6,6 +6,7 @@ import os
 import pickle
 import posixpath
 import re
+import secrets
 import shutil
 import sqlite3
 import threading
@@ -23,7 +24,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -230,7 +231,7 @@ def _check_password(stored: str, password: str) -> bool:
 def _gate():
     """Доступ к инстансу: если задан пароль — требуется вход (D3)."""
     ep = request.endpoint
-    if ep in ("static", "login", "logout", "healthz"):
+    if ep in ("static", "login", "logout", "healthz", "share_page"):
         return None
     stored = db.get_settings().get("password_hash", "")
     if not stored or session.get("owner"):
@@ -779,6 +780,30 @@ def book_page(book_id: int):
         "book.html", book=book, rows=rows, pct_book=pct_book,
         resume_id=resume_id, resume_label=resume_label,
     )
+
+
+@app.route("/share/<token>")
+def share_page(token: str):
+    """D7: публичная read-only ссылка на книгу по токену."""
+    conn = get_db()
+    try:
+        row = conn.execute(
+            "SELECT book_id FROM share_tokens WHERE token = ? "
+            "AND (expires_at IS NULL OR expires_at > ?)",
+            (token, db.now()),
+        ).fetchone()
+        if not row:
+            abort(404)
+        book = conn.execute("SELECT * FROM books WHERE id = ?", (row["book_id"],)).fetchone()
+        if not book:
+            abort(404)
+        rows = conn.execute(
+            "SELECT id, ord, title, words FROM chapters WHERE book_id = ? ORDER BY ord",
+            (book["id"],),
+        ).fetchall()
+    finally:
+        conn.close()
+    return render_template("share.html", book=book, rows=rows, share_token=token)
 
 
 # ---------------------------------------------------------------- story (chapter)
@@ -1459,6 +1484,45 @@ def api_progress():
     finally:
         conn.close()
     return {"ok": True}
+
+
+@app.route("/api/book/<int:book_id>/share", methods=["POST", "GET"])
+@app.route("/api/book/<int:book_id>/share/<token>", methods=["DELETE"])
+@json_api
+def api_book_share(book_id: int, token: str = ""):
+    """D7: GET — список токенов шеринга книги.
+    POST — создать новый токен и вернуть ссылку.
+    DELETE /<token> — отозвать токен."""
+    if request.method == "GET":
+        conn = get_db()
+        try:
+            tokens = conn.execute(
+                "SELECT id, token, created_at, expires_at FROM share_tokens WHERE book_id = ?",
+                (book_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return {"ok": True, "tokens": [dict(t) for t in tokens]}
+
+    conn = get_db()
+    try:
+        book = conn.execute("SELECT id FROM books WHERE id = ?", (book_id,)).fetchone()
+        if not book:
+            abort(404)
+        if request.method == "DELETE" and token:
+            conn.execute("DELETE FROM share_tokens WHERE token = ? AND book_id = ?", (token, book_id))
+            conn.commit()
+            return {"ok": True}
+        new_token = secrets.token_urlsafe(24)
+        conn.execute(
+            "INSERT INTO share_tokens(book_id, token, created_at) VALUES (?, ?, ?)",
+            (book_id, new_token, db.now()),
+        )
+        conn.commit()
+        share_url = url_for("share_page", token=new_token, _external=True)
+        return {"ok": True, "token": new_token, "share_url": share_url}
+    finally:
+        conn.close()
 
 
 @app.post("/api/bookmark")

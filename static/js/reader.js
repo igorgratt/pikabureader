@@ -140,6 +140,23 @@
     else done();
   });
 
+  // D7: share book via token link
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".book-share");
+    if (!btn) return;
+    const bookId = btn.dataset.book;
+    post(`/api/book/${bookId}/share`, {}).then((res) => {
+      if (!res.ok) { alert(res.error || "Ошибка"); return; }
+      const url = res.share_url;
+      const done = () => {
+        btn.textContent = "✓ Ссылка скопирована";
+        setTimeout(() => (btn.textContent = "↗ Поделиться"), 2000);
+      };
+      if (navigator.clipboard) navigator.clipboard.writeText(url).then(done, done);
+      else location.href = url;
+    });
+  });
+
   // ------------------------------------------------ progress
   const readerEl = document.getElementById("reader");
   const storyPage = document.querySelector(".story-page");

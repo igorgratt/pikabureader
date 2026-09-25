@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ book.title }} — {{ book.author }} — PikaBuReader{% endblock %}
+
+{% block content %}
+<section class="community-head">
+  {% if book.cover %}
+    <img class="community-avatar-xl" src="/covers/{{ book.cover }}" alt="">
+  {% else %}
+    <span class="community-avatar-xl community-avatar-fb">{{ book.title[:1] }}</span>
+  {% endif %}
+  <div class="community-info">
+    <h1 class="community-title">{{ book.title }}</h1>
+    <div class="community-sub">Автор: {{ book.author }}</div>
+    <div class="community-stats">
+      <span>{{ rows | length }} глав</span>
+    </div>
+    {% if book.tags %}<div class="story-tags">{% for t in book.tags.split(',') %}<span class="tag">{{ t.strip() }}</span>{% endfor %}</div>{% endif %}
+  </div>
+</section>
+
+{% if book.description %}
+  <div class="book-annotation">{{ book.description }}</div>
+{% endif %}
+
+<div class="feed-head"><h2>Главы</h2></div>
+
+{% for r in rows %}
+<a class="chapter-row" href="{{ url_for('story', chapter_id=r.id) }}">
+  <span class="chapter-num">{{ r.ord }}</span>
+  <span class="chapter-main">
+    <b>{{ r.title }}</b>
+    <i>{{ r.words }} слов</i>
+  </span>
+  <span class="chapter-arrow">›</span>
+</a>
+{% endfor %}
+{% endblock %}

@@ -72,6 +72,10 @@ settings(key PK, value)   -- theme, font, size, width
 | GET | `/fonts/<name>` | Свой шрифт `custom.ttf/otf` (R8; имя — строгий whitelist) |
 | GET | `/import/status` | Страница статуса фонового импорта (F7; JS-поллинг) |
 | GET | `/api/import/status` | JSON: список задач очереди импорта (F7) |
+| GET | `/share/<token>` | Публичная read-only ссылка на книгу по токену (D7) |
+| GET | `/api/book/<book_id>/share` | JSON: список токенов шеринга книги (D7) |
+| POST | `/api/book/<book_id>/share` | JSON: создать токен шеринга, вернуть ссылку (D7) |
+| DELETE | `/api/book/<book_id>/share/<token>` | JSON: отозвать токен шеринга (D7) |
 | GET | `/book/<id>` | Страница книги с оглавлением |
 | GET | `/story/<id>` | Страница главы + заметки |
 | GET | `/goto/<book_id>/<path>` | Внутрикнижная ссылка (сноска): редирект на главу с якорем `?frag=`, файл не импортирован — на первую главу книги |
