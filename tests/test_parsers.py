@@ -402,3 +402,35 @@ def test_split_html_chunks():
 def test_parsed_book_defaults():
     b = ParsedBook()
     assert b.chapters == [] and b.assets == {} and b.cover is None
+    assert b.sources == []
+
+
+def test_clean_html_keeps_anchor_ids():
+    """Якоря целей сносок (id) переживают санитизацию — без них /goto не finds."""
+    out = _clean_html(
+        '<section id="vv-1"><p id="p1">Текст</p>'
+        '<a id="a1">метка</a><a href="x" title="t" id="a2">y</a></section>'
+    )
+    assert 'id="vv-1"' in out
+    assert 'id="p1"' in out
+    assert 'id="a1"' in out
+    assert 'id="a2"' in out and 'href="x"' in out
+    assert "<section" not in out  # неизвестный тег раскрыт, якорь сохранён
+
+
+def test_epub_sources_align_with_chapters(tmp_path):
+    """EPUB: у каждой главы есть файл-источник для /goto-ссылок."""
+    path = make_epub(
+        tmp_path / "b.epub",
+        [
+            ("Первая", '<p>один <a href="ch2.xhtml#to-second">к второй</a></p>'),
+            ("Вторая", '<p><span id="to-second">два</span></p>'),
+        ],
+    )
+    res = parse_epub(path)
+    assert len(res.chapters) == len(res.sources) == 2
+    assert res.sources == ["ch1.xhtml", "ch2.xhtml"]
+    # href на месте (переписание в /goto — забота app._store_book)
+    assert 'href="ch2.xhtml#to-second"' in res.chapters[0][1]
+    # якорь во второй главе сохранён
+    assert 'id="to-second"' in res.chapters[1][1]

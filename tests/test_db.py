@@ -175,3 +175,50 @@ def test_v5_bookmark_quote_column(isolated_db):
     assert "bookmark_quote" in cols
     assert row["bookmark_quote"] == ""  # старая закладка получила пустую цитату
     assert saved["bookmark_quote"] == "нужный абзац"
+
+
+def test_v6_source_column_and_legacy_link_fix(isolated_db):
+    """Миграция 6: chapters.source + разовая правка старых мёртвых ссылок."""
+    conn = sqlite3.connect(isolated_db / "app.db")
+    conn.executescript(db.SCHEMA)
+    conn.execute("INSERT INTO books(title, author, created_at) VALUES('t','a','x')")
+    conn.execute(
+        "INSERT INTO chapters(book_id, ord, title, html, created_at) VALUES("
+        "1, 1, 'h', "
+        "'<p><a href=\"../Text/notes.xhtml#vv-1\">1</a> <a href=\"#n\">2</a>"
+        " <a href=\"https://example.com\">3</a></p>', 'x')"
+    )
+    conn.commit()
+    conn.close()
+    assert db.schema_version() == 0
+
+    db.init_db()
+    assert db.schema_version() == db.SCHEMA_VERSION
+    conn = db.connect()
+    try:
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(chapters)")]
+        html = conn.execute("SELECT html FROM chapters WHERE id = 1").fetchone()["html"]
+    finally:
+        conn.close()
+    assert "source" in cols
+    # мёртвая относительная ссылка снята, текст цел; рабочие ссылки целы
+    assert 'href="../Text' not in html
+    assert ">1 " in html
+    assert '<a href="#n">2</a>' in html
+    assert '<a href="https://example.com">3</a>' in html
+
+
+def test_neutralize_dead_links():
+    h = (
+        '<a href="../Text/notes.xhtml#v">1</a>'
+        '<a href="g1.xhtml#x">2</a>'
+        '<a href="#n1">3</a>'
+        '<a href="https://x.y">4</a>'
+        '<a href="/story/5">5</a>'
+        '<a href="/goto/1/Text/n.xhtml">6</a>'
+    )
+    out = db.neutralize_dead_links(h)
+    assert out == '12<a href="#n1">3</a><a href="https://x.y">4</a>' \
+                  '<a href="/story/5">5</a><a href="/goto/1/Text/n.xhtml">6</a>'
+    # идемпотентна
+    assert db.neutralize_dead_links(out) == out

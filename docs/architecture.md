@@ -43,13 +43,14 @@ pikabureader/
 
 ```
 books(id, title, author, cover, tags, description, created_at)
-  └─ chapters(id, book_id→books, ord, title, html, words, rating, created_at)
+  └─ chapters(id, book_id→books, ord, title, html, words, source, rating, created_at)
        ├─ notes(id, chapter_id→chapters, parent_id→notes, text, rating, created_at)
        └─ state(chapter_id→chapters PK, bookmark, done, read_pct, last_read_at)
 settings(key PK, value)   -- theme, font, size, width
 ```
 
 - `chapters.html` — очищенный HTML главы, в ссылках на картинки подставлен путь `/media/images/<book_id>/...`.
+- `chapters.source` — файл-источник главы в архиве EPUB (для ссылок `/goto`); пусто у FB2/PDF/TXT.
 - `notes.parent_id` — дерево заметок (ответы); каскадное удаление при удалении книги/главы.
 - `state` — одна строка на главу: закладка, флаг «прочитано», прогресс в процентах. При обновлении прогресса применяется `MAX` — позиция не откатывается при повторном открытии сверху.
 - `settings` — глобальные настройки чтения, читаются в context processor и попадают в `window.READER.settings`.
@@ -64,6 +65,7 @@ settings(key PK, value)   -- theme, font, size, width
 | GET | `/bookmarks` | Список закладок |
 | GET | `/book/<id>` | Страница книги с оглавлением |
 | GET | `/story/<id>` | Страница главы + заметки |
+| GET | `/goto/<book_id>/<path>` | Внутрикнижная ссылка (сноска): редирект на главу с якорем `?frag=`, файл не импортирован — на первую главу книги |
 | GET/POST | `/add` | Форма импорта; POST с `file` парсит книгу и создаёт записи |
 | GET | `/covers/<name>` | Отдача обложек |
 | GET | `/media/images/<book_id>/<name>` | Отдача картинок глав |
@@ -84,13 +86,13 @@ settings(key PK, value)   -- theme, font, size, width
 
 ## Парсеры
 
-Оба парсера возвращают `ParsedBook`: `title, author, tags, description, cover(bytes), chapters[(title, html)], assets{name: bytes}`. Импорт (`app.py`): создаёт книгу, сохраняет обложку/картинки, вставляет главы, подставляет пути `/media/images/`.
+Оба парсера возвращают `ParsedBook`: `title, author, tags, description, cover(bytes), chapters[(title, html)], assets{name: bytes}, sources[файл-источник главы]` (заполняется у EPUB). Импорт (`app.py`): создаёт книгу, сохраняет обложку/картинки, переписывает внутрикнижные ссылки на `/goto`, вставляет главы, подставляет пути `/media/images/`.
 
 ### Общая чистка HTML (`_clean_fragment`)
 
 1. Удаляются комментарии, `<?xml?>`, DOCTYPE.
 2. Проход 1 (по снимку дерева — модификация во время `.iter()` запрещена, это был баг): вырезаются `script/style/head/meta/title`.
-3. Проход 2: неизвестные теги «разворачиваются» в детей, атрибуты остаются только `img[src,alt]`, `a[href,title]`.
+3. Проход 2: неизвестные теги «разворачиваются» в детей (но если у тега есть `id` — он превращается в `<span id>`, чтобы не потерять якорь сноски), атрибуты остаются только `img[src,alt]`, `a[href,title,id]`, у остальных — только `id`.
 
 ### EPUB
 

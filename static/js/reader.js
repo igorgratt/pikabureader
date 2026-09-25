@@ -187,6 +187,7 @@
   }
 
   function restorePosition() {
+    if (location.hash) return; // переход по якорю (сноска) — не мешаем
     const saved = parseInt(storyPage.dataset.readPct || "0", 10);
     if (!(saved > 2 && saved < 95)) return;
     const rect = readerEl.getBoundingClientRect();

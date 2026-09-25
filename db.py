@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS settings (
 # ключ = номер версии, значение = SQL-скрипт апгрейда. Порядок применяется
 # по возрастанию, каждая миграция выполняется транзакционно и поднимает
 # PRAGMA user_version. SCHEMA — только для создания новой базы с нуля.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 MIGRATIONS: dict[int, str] = {
     2: """
@@ -112,6 +112,10 @@ MIGRATIONS: dict[int, str] = {
     5: """
     ALTER TABLE state ADD COLUMN bookmark_quote TEXT NOT NULL DEFAULT '';
     """,
+    # 6: файл-источник главы — внутрикнижные ссылки (сноски) → /goto
+    6: """
+    ALTER TABLE chapters ADD COLUMN source TEXT NOT NULL DEFAULT '';
+    """,
 }
 
 
@@ -128,6 +132,7 @@ def init_db() -> None:
     try:
         conn.executescript(SCHEMA)
         current = conn.execute("PRAGMA user_version").fetchone()[0]
+        start = current
         if current > SCHEMA_VERSION:
             raise RuntimeError(
                 f"База данных версии {current} новее кода ({SCHEMA_VERSION}): "
@@ -139,7 +144,22 @@ def init_db() -> None:
                 conn.execute(f"PRAGMA user_version = {target}")
                 current = target
         if current < SCHEMA_VERSION:
-            conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            # нельзя молча поднять версию: колонки бы не появились
+            raise RuntimeError(
+                f"Нет миграции до версии схемы {SCHEMA_VERSION} "
+                f"(база осталась на {current}) — добавьте запись в MIGRATIONS"
+            )
+        if start < 6:
+            # разовая правка старых импортов: относительные ссылки на файлы
+            # книги (../Text/notes.xhtml#...) вели в 404 — снимаем href,
+            # текст ссылки остаётся (у новых книг ссылки идут через /goto)
+            rows = conn.execute("SELECT id, html FROM chapters").fetchall()
+            for r in rows:
+                fixed = neutralize_dead_links(r["html"])
+                if fixed != r["html"]:
+                    conn.execute(
+                        "UPDATE chapters SET html = ? WHERE id = ?", (fixed, r["id"])
+                    )
         _reindex_fts(conn)
         conn.commit()
     finally:
@@ -148,6 +168,27 @@ def init_db() -> None:
 
 def strip_html(html: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", html)).strip()
+
+
+_A_TAG = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.S | re.I)
+_A_HREF = re.compile(r'href="([^"]*)"', re.I)
+
+
+def neutralize_dead_links(html: str) -> str:
+    """Снять href у относительных ссылок на файлы книги (старые импорты
+    давали 404: /Text/notes.xhtml). Якоря, абсолютные и app-ссылки — целы."""
+    def repl(m: re.Match) -> str:
+        hm = _A_HREF.search(m.group(1))
+        if not hm:
+            return m.group(0)
+        h = hm.group(1).strip()
+        if h.startswith(("#", "/", "http:", "https:", "mailto:", "asset:", "data:")):
+            return m.group(0)
+        if re.search(r"\.(?:x?html?|xml)(?:#|$)", h, re.I) or h.startswith(("./", "../")):
+            return m.group(2)  # ссылка мертва: оставляем текст
+        return m.group(0)
+
+    return _A_TAG.sub(repl, html)
 
 
 def _reindex_fts(conn: sqlite3.Connection) -> None:

@@ -26,6 +26,7 @@ class ParsedBook:
     cover: bytes | None = None
     chapters: list = field(default_factory=list)  # [(title, html)]
     assets: dict = field(default_factory=dict)  # name -> bytes
+    sources: list = field(default_factory=list)  # файл-источник главы (EPUB)
 
 
 def _tag_of(el) -> str:
@@ -77,13 +78,24 @@ def _clean_fragment(raw: bytes | str) -> etree._Element:
                         del el.attrib[attr]
             elif tag == "a":
                 for attr in list(el.attrib):
-                    if attr.lower() not in ("href", "title"):
+                    if attr.lower() not in ("href", "title", "id"):
                         del el.attrib[attr]
             else:
+                keep = el.get("id")
                 el.attrib.clear()
+                if keep is not None:
+                    el.set("id", keep)
         else:
             parent = el.getparent()
             if parent is None:
+                continue
+            if el.get("id"):
+                # цель внутрикнижной ссылки (сноска) — сохраняем якорь,
+                # unwrap бы его потерял
+                el.tag = "span"
+                for attr in list(el.attrib):
+                    if attr != "id":
+                        del el.attrib[attr]
                 continue
             # unwrap: содержимое (text + дети + tail) переходит на место тега
             if el.text:
@@ -250,6 +262,7 @@ def parse_epub(path: str) -> ParsedBook:
             body = "".join(pending_imgs) + body
             pending_imgs.clear()
         res.chapters.append((title, body))
+        res.sources.append(posixpath.normpath(item.get_name()))
 
     # картинки в конце книги — приклеиваем к последней главе
     if pending_imgs and res.chapters:
@@ -262,7 +275,9 @@ def parse_epub(path: str) -> ParsedBook:
     if len(res.chapters) <= 1 and res.chapters:
         title, body = res.chapters[0]
         split = _split_html(body, "Глава")
-        res.chapters = split if len(split) > 1 else [(title, body)]
+        if len(split) > 1:
+            res.chapters = split
+            res.sources = [res.sources[0] if res.sources else ""] * len(split)
     return res
 
 

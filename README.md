@@ -2,7 +2,7 @@
 
 Локальная читалка для электронных книг в формате ленты Pikabu: книга — «сообщество», глава — «пост», заметки — «комментарии», оценки глав — «плюсы/минусы».
 
-**Версия:** `0.5.1` — см. [CHANGELOG.md](CHANGELOG.md); версии отмечены тегами `vX.Y.Z` в git.
+**Версия:** `0.6.0` — см. [CHANGELOG.md](CHANGELOG.md); версии отмечены тегами `vX.Y.Z` в git.
 
 ## Возможности
 
@@ -55,7 +55,7 @@ HOST=0.0.0.0 python app.py        # Windows: set HOST=0.0.0.0 && python app.py
 
 Затем открой на телефоне `http://<IP-компьютера>:8000` (IP смотреть через `ipconfig`). В Docker это работает сразу.
 
-Полная документация — в [docs/](docs/README.md): [объём MVP](docs/mvp.md), [архитектура](docs/architecture.md), [беклог развития](docs/backlog.md).
+Полная документация — в [docs/](docs/README.md): [объём MVP](docs/mvp.md), [архитектура](docs/architecture.md), [беклог развития](docs/backlog.md), [справка по вопросам](docs/faq.md).
 
 ## Структура
 
@@ -83,7 +83,7 @@ data/             # база, обложки, картинки, загружен
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest tests/ -q    # 70 тестов
+python -m pytest tests/ -q    # 78 тестов
 ```
 
 Та же проверка гоняется в CI (GitHub Actions) на каждый push и pull request.

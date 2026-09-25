@@ -641,3 +641,117 @@ def test_hidden_attribute_overrides_display():
     ), "нет глобального правила [hidden] { display: none !important }"
     m = _re.search(r"\.toc-pop\s*\{(.*?)\}", css, _re.S)
     assert m and "display: flex" in m.group(1)
+
+
+# ---------------- X2: внутрикнижные ссылки (сноски) → /goto
+
+def test_rewrite_local_links_to_goto():
+    """Ссылки между файлами EPUB ведут на /goto, мёртвые — снимаются."""
+    import app as app_module
+
+    srcs = {"Text/ch.xhtml", "Text/notes.xhtml", "Text/g1.xhtml"}
+    h = (
+        '<p><a href="../Text/notes.xhtml#vv-1">1</a>'
+        ' <a href="g1.xhtml#g1-1">2</a>'
+        ' <a href="#same">3</a>'
+        ' <a href="http://example.com">4</a>'
+        ' <a href="../Text/missing.xhtml#z">5</a></p>'
+    )
+    out = app_module._rewrite_local_links(h, "Text/ch.xhtml", srcs, 7)
+    assert 'href="/goto/7/Text/notes.xhtml?frag=vv-1"' in out
+    assert 'href="/goto/7/Text/g1.xhtml?frag=g1-1"' in out
+    assert 'href="/goto/7/Text/ch.xhtml?frag=same"' in out
+    assert 'href="http://example.com"' in out
+    assert "missing.xhtml" not in out  # не импортирован — ссылка снята
+    assert " 5</p>" in out  # текст ссылки остался
+    # FB2/txt: файлов-источников нет — ничего не трогаем
+    assert app_module._rewrite_local_links(h, "", srcs, 7) == h
+
+
+def test_split_mode_keeps_sources_aligned():
+    """F9-режимы возвращают sources, выровненные с главами."""
+    import app as app_module
+
+    ch = [("A", "<p>текст главы а</p>"), ("B", "<p>текст главы б</p>")]
+    src = ["x/a.xhtml", "x/b.xhtml"]
+
+    out, s = app_module._apply_split_mode(ch, "parts", src)
+    assert out == ch and s == src
+
+    out, s = app_module._apply_split_mode(ch, "merge", src)
+    assert len(out) == 1 and s == ["x/a.xhtml"]
+
+    long_html = "<p>" + ("слово " * 900) + "</p>"
+    out, s = app_module._apply_split_mode([("A", long_html)], "compact", ["x/a.xhtml"])
+    assert len(out) > 1 and set(s) == {"x/a.xhtml"}
+
+    # без sources — прежнее поведение (обычный список)
+    assert app_module._apply_split_mode(ch, "parts") == ch
+
+
+def test_store_book_rewrites_links_and_keeps_source(client):
+    """Импорт EPUB-подобной книги: href переписан, source сохранён."""
+    import app as app_module
+    from parsers import ParsedBook
+
+    parsed = ParsedBook(title="Книга", author="Автор")
+    parsed.chapters = [
+        ("Глава", '<p><a href="../Text/notes.xhtml#vv-1">сноска</a></p>'),
+        ("Примечания", '<p><span id="vv-1">Примечание</span></p>'),
+    ]
+    parsed.sources = ["Text/ch.xhtml", "Text/notes.xhtml"]
+    res = app_module._store_book(parsed, parsed.chapters)
+    assert res["status"] == "ok"
+    bid = res["book_id"]
+
+    conn = db.connect()
+    try:
+        rows = conn.execute(
+            "SELECT ord, html, source FROM chapters WHERE book_id = ? ORDER BY ord",
+            (bid,),
+        ).fetchall()
+    finally:
+        conn.close()
+    assert rows[0]["source"] == "Text/ch.xhtml"
+    assert rows[1]["source"] == "Text/notes.xhtml"
+    assert f"/goto/{bid}/Text/notes.xhtml?frag=vv-1" in rows[0]["html"]
+
+
+def test_goto_route(client):
+    """/goto ведёт на главу с якорем, на несуществующее — не даёт 404."""
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            "INSERT INTO books(title, author, created_at) VALUES('К','А','x')"
+        )
+        bid = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO chapters(book_id, ord, title, html, source, created_at) "
+            "VALUES(?, 1, 'Глава', '<p>текст</p>', 'Text/ch1.xhtml', 'x')",
+            (bid,),
+        )
+        ch1 = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO chapters(book_id, ord, title, html, source, created_at) "
+            "VALUES(?, 2, 'Сноски', '<p><span id=\"vv-1\">Примечание</span></p>', "
+            "'Text/notes.xhtml', 'x')",
+            (bid,),
+        )
+        notes_ch = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+
+    # файл + якорь → глава, содержащая якорь
+    r = client.get(f"/goto/{bid}/Text/notes.xhtml?frag=vv-1")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith(f"/story/{notes_ch}#vv-1")
+    # без якоря → первая глава файла
+    r = client.get(f"/goto/{bid}/Text/ch1.xhtml")
+    assert r.headers["Location"].endswith(f"/story/{ch1}")
+    # файл не импортирован → первая глава книги, а не 404
+    r = client.get(f"/goto/{bid}/Text/nope.xhtml")
+    assert r.status_code == 302
+    assert r.headers["Location"].endswith(f"/story/{ch1}")
+    # неизвестная книга → 404
+    assert client.get("/goto/99999/Text/x.xhtml").status_code == 404

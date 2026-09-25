@@ -2,8 +2,10 @@ import hashlib
 import hmac
 import json
 import os
+import posixpath
 import re
 import sqlite3
+import urllib.parse
 import uuid
 import zipfile
 from functools import wraps
@@ -15,7 +17,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -562,6 +564,42 @@ def story(chapter_id: int):
     )
 
 
+@app.route("/goto/<int:book_id>/<path:src>")
+def goto_chapter(book_id: int, src: str):
+    """Переход внутри книги по файлу-источнику (сноски, ссылки между
+    главами EPUB): редирект на главу с якорем; файл не импортирован —
+    на первую главу книги, чтобы не ловить 404."""
+    frag = request.args.get("frag", "")
+    marker = f'id="{frag}"' if frag else ""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT id, html FROM chapters WHERE book_id = ? AND source = ? ORDER BY ord",
+            (book_id, src),
+        ).fetchall()
+        target = next((r for r in rows if marker and marker in r["html"]), None)
+        if target is None and rows:
+            target = rows[0]
+        if target is None and marker:
+            # источник неизвестен (старый импорт) — ищем якорь по всей книге
+            allrows = conn.execute(
+                "SELECT id, html FROM chapters WHERE book_id = ? ORDER BY ord",
+                (book_id,),
+            ).fetchall()
+            target = next((r for r in allrows if marker in r["html"]), None)
+        if target is None:
+            target = conn.execute(
+                "SELECT id FROM chapters WHERE book_id = ? ORDER BY ord LIMIT 1",
+                (book_id,),
+            ).fetchone()
+        if target is None:
+            abort(404)
+    finally:
+        conn.close()
+    suffix = "#" + urllib.parse.quote(frag, safe="") if frag else ""
+    return redirect(url_for("story", chapter_id=target["id"]) + suffix)
+
+
 # ---------------------------------------------------------------- add
 
 # F9: режимы разбивки при импорте
@@ -595,7 +633,43 @@ def _import_error(exc: Exception, filename: str) -> dict:
     return {"file": filename, "status": "error", "kind": kind, "msg": msg, "hint": hint}
 
 
-def _store_book(parsed, chapters) -> dict:
+def _rewrite_local_links(html: str, own: str, sources: set, book_id) -> str:
+    """Внутрикнижные ссылки EPUB (сноски, переходы между файлами) — через
+    /goto/<book>/<файл>?frag=<якорь>: на странице главы относительный href
+    вроде ../Text/notes.xhtml отдавал 404. Ссылки на неимпортированные
+    файлы снимаем (текст остаётся); без файла-источника (FB2/txt) — не трогаем."""
+    if not sources or not own:
+        return html
+
+    def tag_repl(m: re.Match) -> str:
+        tag = m.group(0)
+        hm = re.search(r'href="([^"]*)"', tag)
+        if not hm:
+            return tag
+        href = hm.group(1)
+        if href.startswith(("http:", "https:", "mailto:", "/", "asset:", "data:")):
+            return tag
+        path, _, frag = href.partition("#")
+        if path:
+            target = posixpath.normpath(
+                posixpath.join(posixpath.dirname(own), path)
+            )
+            if target not in sources:
+                return tag.replace(f'href="{href}"', 'href="__dead__"')
+        else:
+            target = own
+        url = f"/goto/{book_id}/{urllib.parse.quote(target, safe='/')}"
+        if frag:
+            url += f"?frag={urllib.parse.quote(frag, safe='')}"
+        return tag.replace(f'href="{href}"', f'href="{url}"')
+
+    html = re.sub(r"<a\b[^>]*>", tag_repl, html)
+    return re.sub(
+        r'<a\b[^>]*href="__dead__"[^>]*>(.*?)</a>', r"\1", html, flags=re.S
+    )
+
+
+def _store_book(parsed, chapters, sources: list | None = None) -> dict:
     """Сохранить разобранную книгу; возвращает карточку результата (F5)."""
     if not chapters:
         return {
@@ -645,6 +719,19 @@ def _store_book(parsed, chapters) -> dict:
             with open(os.path.join(COVER_DIR, cover_name), "wb") as f:
                 f.write(parsed.cover)
 
+        if sources is None or len(sources) != len(chapters):
+            sources = (
+                list(parsed.sources)
+                if len(parsed.sources) == len(chapters)
+                else [""] * len(chapters)
+            )
+        src_set = {s for s in parsed.sources if s}
+        if src_set:
+            chapters = [
+                (title, _rewrite_local_links(html, sources[i], src_set, book_id))
+                for i, (title, html) in enumerate(chapters)
+            ]
+
         for ord_, (title, html) in enumerate(chapters, 1):
             html = html.replace("asset:", f"/media/images/{book_id}/")
             for short, target in mapping.items():
@@ -652,9 +739,9 @@ def _store_book(parsed, chapters) -> dict:
             text = re.sub(r"<[^>]+>", "", html)
             words = len(text.split())
             cur = conn.execute(
-                """INSERT INTO chapters(book_id, ord, title, html, words, created_at)
-                   VALUES(?,?,?,?,?,?)""",
-                (book_id, ord_, title, html, words, db.now()),
+                """INSERT INTO chapters(book_id, ord, title, html, words, source, created_at)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (book_id, ord_, title, html, words, sources[ord_ - 1], db.now()),
             )
             try:
                 conn.execute(
@@ -750,38 +837,53 @@ def _split_html_blocks(html: str, limit: int = 2000) -> list[str]:
 
 
 def _merge_chapters(chapters: list, limit: int = 8000) -> list:
-    """Склеить соседние мелкие секции в главы ~limit знаков."""
-    out, cur_title, cur_body = [], None, ""
-    for title, html in chapters:
+    """Склеить соседние мелкие секции в главы ~limit знаков.
+    Лишние поля кортежа (например, файл-источник) остаются у первой главы группы."""
+    out, cur = [], None
+    for ch in chapters:
+        html = ch[1]
         plain = len(re.sub(r"<[^>]+>", "", html))
-        if cur_title is None:
-            cur_title, cur_body = title, html
+        if cur is None:
+            cur = [ch, html]
             continue
-        cur_len = len(re.sub(r"<[^>]+>", "", cur_body))
+        cur_len = len(re.sub(r"<[^>]+>", "", cur[1]))
         if cur_len < limit and plain < limit:
-            cur_body += "<hr>" + html
+            cur[1] += "<hr>" + html
         else:
-            out.append((cur_title, cur_body))
-            cur_title, cur_body = title, html
-    if cur_title is not None:
-        out.append((cur_title, cur_body))
+            out.append((cur[0][0], cur[1]) + tuple(cur[0][2:]))
+            cur = [ch, html]
+    if cur is not None:
+        out.append((cur[0][0], cur[1]) + tuple(cur[0][2:]))
     return out
 
 
-def _apply_split_mode(chapters: list, mode: str) -> list:
+def _apply_split_mode(chapters: list, mode: str, sources: list | None = None):
+    """F9-режимы разбивки. sources (необяз.) — файл-источник на главу; если
+    передан, возвращает (chapters, sources) с выровненным списком источников."""
+    passed = sources is not None
+    if not passed or len(sources) != len(chapters):
+        sources = [""] * len(chapters)
+
     if mode == "compact":
-        out = []
-        for title, html in chapters:
+        out, sout = [], []
+        for i, (title, html) in enumerate(chapters):
             parts = _split_html_blocks(html)
             if len(parts) == 1:
                 out.append((title, html))
+                sout.append(sources[i])
             else:
-                for i, part in enumerate(parts, 1):
-                    out.append((f"{title} ({i}/{len(parts)})", part))
-        return out
+                for j, part in enumerate(parts, 1):
+                    out.append((f"{title} ({j}/{len(parts)})", part))
+                    sout.append(sources[i])
+        return (out, sout) if passed else out
     if mode == "merge":
-        return _merge_chapters(chapters)
-    return chapters
+        merged = _merge_chapters(
+            [(ch[0], ch[1], sources[i]) for i, ch in enumerate(chapters)]
+        )
+        out = [m[:2] for m in merged]
+        sout = [m[2] for m in merged]
+        return (out, sout) if passed else out
+    return (chapters, list(sources)) if passed else chapters
 
 
 @app.route("/add", methods=["GET", "POST"])
@@ -855,7 +957,8 @@ def add_commit():
     except Exception as exc:  # noqa: BLE001
         result = _import_error(exc, pending["filename"])
     else:
-        result = _store_book(parsed, _apply_split_mode(parsed.chapters, mode))
+        chapters, sources = _apply_split_mode(parsed.chapters, mode, parsed.sources)
+        result = _store_book(parsed, chapters, sources)
     result["file"] = pending["filename"]
     _log_import("import", f"{result['file']}: {result['status']} ({mode}) — {result['msg']}")
     try:
@@ -1354,7 +1457,7 @@ def library_export():
         chapters_by_book = {}
         for b in books:
             chapters_by_book[b["id"]] = conn.execute(
-                "SELECT ord, title, html, words FROM chapters WHERE book_id = ? ORDER BY ord",
+                "SELECT ord, title, html, words, source FROM chapters WHERE book_id = ? ORDER BY ord",
                 (b["id"],),
             ).fetchall()
     finally:
@@ -1466,13 +1569,18 @@ def library_import():
                         r"/media/images/\d+/", f"/media/images/{book_id}/",
                         ch.get("html") or "",
                     )
+                    # внутрикнижные ссылки: /goto/<старый id>/ → /goto/<новый>/
+                    html = re.sub(
+                        r"/goto/\d+/", f"/goto/{book_id}/", html
+                    )
+                    html = db.neutralize_dead_links(html)
                     text = re.sub(r"<[^>]+>", "", html)
                     ctitle = (ch.get("title") or "Глава")[:300]
                     cur = conn.execute(
-                        """INSERT INTO chapters(book_id, ord, title, html, words, created_at)
-                           VALUES(?,?,?,?,?,?)""",
+                        """INSERT INTO chapters(book_id, ord, title, html, words, source, created_at)
+                           VALUES(?,?,?,?,?,?,?)""",
                         (book_id, int(ch.get("ord") or 1), ctitle, html,
-                         len(text.split()), db.now()),
+                         len(text.split()), ch.get("source") or "", db.now()),
                     )
                     try:
                         conn.execute(
