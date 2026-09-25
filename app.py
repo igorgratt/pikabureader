@@ -19,7 +19,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -528,6 +528,33 @@ def notes_export():
     return Response(
         md, mimetype="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+@app.route("/notes")
+def notes_list():
+    """N8: все заметки профиля одним списком, фильтр по книгам (?book=)."""
+    book_id = request.args.get("book", type=int)
+    conn = get_db()
+    try:
+        books = conn.execute(
+            "SELECT id, title FROM books ORDER BY title COLLATE NOCASE"
+        ).fetchall()
+        sql = """SELECT n.*, c.title ch_title, c.ord, b.title book_title, b.id bid,
+                        (SELECT COUNT(*) FROM notes r WHERE r.parent_id = n.id) replies
+                 FROM notes n JOIN chapters c ON c.id = n.chapter_id
+                 JOIN books b ON b.id = c.book_id
+                 WHERE n.profile_id = ? AND n.parent_id IS NULL"""
+        params: list = [_profile_id()]
+        if book_id:
+            sql += " AND b.id = ?"
+            params.append(book_id)
+        sql += " ORDER BY n.created_at DESC, n.id DESC"
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    return render_template(
+        "notes_all.html", rows=rows, books=books, book_id=book_id
     )
 
 

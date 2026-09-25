@@ -737,6 +737,31 @@ kbd {
 }
 .library-progress { color: var(--text-2); font-size: 12px; margin-top: 3px; }
 
+/* ---------------- N8: все заметки ---------------- */
+.notes-filter {
+  display: flex; gap: 12px; align-items: center;
+  margin: 0 0 14px; flex-wrap: wrap;
+}
+.notes-filter select {
+  min-height: 38px; padding: 6px 10px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--card);
+  color: inherit; font-size: 14px; max-width: 100%;
+}
+.notes-filter select:focus { border-color: var(--accent); }
+.notes-export { font-size: 13.5px; color: var(--text-2); }
+.note-row {
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 14px; box-shadow: var(--shadow);
+  padding: 14px 18px; margin-bottom: 10px;
+}
+.note-row-meta {
+  display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap;
+  font-size: 13px; color: var(--text-2); margin-bottom: 8px;
+}
+.note-row-meta a { color: inherit; }
+.note-row-sep { color: var(--border); }
+.note-row-text { margin: 0; font-size: 15px; line-height: 1.5; white-space: pre-wrap; }
+
 /* ---------------- R7: статистика чтения ---------------- */
 .stats-cards { display: flex; gap: 16px; flex-wrap: wrap; }
 .stats-card { flex: 1 1 170px; text-align: center; padding: 10px 8px; }

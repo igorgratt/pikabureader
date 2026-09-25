@@ -993,3 +993,54 @@ def test_streak_series():
     assert s([day(1)], today) == 1  # сегодня ещё не читали — серия жива
     assert s([day(2)], today) == 0  # вчера пропуск — серии нет
     assert s([today, day(2)], today) == 1  # вчера пропуск — серия с сегодня
+
+
+# ---------------------------------------------------------------- N8: все заметки
+
+def test_notes_all_page_and_filter(client):
+    """/notes: все заметки профиля, фильтр ?book= показывает только книгу."""
+    empty = client.get("/notes").get_data(as_text=True)
+    assert "Заметок пока нет" in empty
+
+    cid1 = seed()  # книга «Тест»
+    client.post("/api/note", json={"chapter_id": cid1, "text": "первая мысль"})
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            "INSERT INTO books(title, author, created_at) VALUES('Другая', 'Кто-то', '2026-01-01 00:00:00')"
+        )
+        bid2 = cur.lastrowid
+        cur = conn.execute(
+            "INSERT INTO chapters(book_id, ord, title, html, words, created_at) "
+            "VALUES(?, 1, 'Глава X', '<p>текст</p>', 2, '2026-01-01 00:00:00')",
+            (bid2,),
+        )
+        cid2 = cur.lastrowid
+        conn.commit()
+    finally:
+        conn.close()
+    client.post("/api/note", json={"chapter_id": cid2, "text": "вторая мысль"})
+
+    page = client.get("/notes").get_data(as_text=True)
+    assert "Мои заметки" in page
+    assert "первая мысль" in page and "вторая мысль" in page
+    assert "Другая" in page  # фильтр-список содержит обе книги
+
+    only = client.get(f"/notes?book={bid2}").get_data(as_text=True)
+    assert "вторая мысль" in only
+    assert "первая мысль" not in only
+
+
+def test_notes_all_root_only_with_reply_count(client):
+    """Ответы не дублируются в списке — у корня счётчик реакций-ответов."""
+    cid = seed()
+    root = client.post("/api/note", json={"chapter_id": cid, "text": "корень заметки"})
+    nid = root.get_json()["note"]["id"]
+    client.post(
+        "/api/note", json={"chapter_id": cid, "text": "дочерний ответ", "parent_id": nid}
+    )
+    page = client.get("/notes").get_data(as_text=True)
+    assert "корень заметки" in page
+    assert "дочерний ответ" not in page  # ответ виден на странице главы
+    assert "💬 1" in page  # счётчик ответов у корня
+    assert page.count('<article class="note-row">') == 1

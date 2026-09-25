@@ -41,6 +41,7 @@
         <a href="{{ url_for('bookmarks') }}">🔖 Закладки <span class="side-count">{{ nav_counts.bookmarks }}</span></a>
         <a href="{{ url_for('feed', t='reading') }}">⏳ Сейчас читаю <span class="side-count">{{ nav_counts.reading }}</span></a>
         <a href="{{ url_for('history') }}">🕘 Недавно читал</a>
+        <a href="{{ url_for('notes_list') }}">💬 Мои заметки</a>
         <a href="{{ url_for('stats') }}">📊 Статистика</a>
         <a href="{{ url_for('settings_page') }}">⚙ Настройки</a>
         <a href="{{ url_for('admin') }}">🛡 Панель владельца</a>

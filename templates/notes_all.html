@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Мои заметки — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="feed-head">
+  <h1>Мои заметки</h1>
+  <div class="feed-sub">{{ rows | length }}</div>
+</div>
+
+<div class="subtabs">
+  <a class="subtab" href="{{ url_for('bookmarks') }}">Закладки</a>
+  <a class="subtab" href="{{ url_for('history') }}">Недавно читал</a>
+  <a class="subtab is-active" href="{{ url_for('notes_list') }}">Мои заметки</a>
+</div>
+
+<form class="notes-filter" method="get" action="{{ url_for('notes_list') }}">
+  <select name="book" onchange="this.form.submit()">
+    <option value="">Все книги</option>
+    {% for b in books %}
+    <option value="{{ b.id }}"{{ ' selected' if book_id == b.id }}>{{ b.title }}</option>
+    {% endfor %}
+  </select>
+  <a class="notes-export" href="{{ url_for('notes_export', book_id=book_id) }}">⬇ Markdown</a>
+</form>
+
+{% for r in rows %}
+<article class="note-row">
+  <div class="note-row-meta">
+    <a href="{{ url_for('book_page', book_id=r.bid) }}">{{ r.book_title }}</a>
+    <span class="note-row-sep">·</span>
+    <a href="{{ url_for('story', chapter_id=r.chapter_id) }}">Глава {{ r.ord }}: {{ r.ch_title }}</a>
+    <span class="note-time">{{ r.edited_at or r.created_at }}{% if r.edited_at %} (изменено){% endif %}</span>
+    {% if r.replies %}<span class="note-time">💬 {{ r.replies }}</span>{% endif %}
+  </div>
+  {% if r.quote %}<blockquote class="bookmark-quote">{{ r.quote }}</blockquote>{% endif %}
+  <p class="note-row-text">{{ r.text }}</p>
+</article>
+{% else %}
+<div class="empty-state"><p>Заметок пока нет. Выделите текст в главе и нажмите «Заметить».</p></div>
+{% endfor %}
+{% endblock %}

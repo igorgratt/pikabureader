@@ -10,6 +10,7 @@
 <div class="subtabs">
   <a class="subtab {{ 'is-active' if heading == 'Закладки' }}" href="{{ url_for('bookmarks') }}">Закладки</a>
   <a class="subtab {{ 'is-active' if heading == 'Недавно читал' }}" href="{{ url_for('history') }}">Недавно читал</a>
+  <a class="subtab" href="{{ url_for('notes_list') }}">Мои заметки</a>
 </div>
 
 {% for r in rows %}
