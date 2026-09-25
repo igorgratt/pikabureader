@@ -24,7 +24,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.15.0"
+__version__ = "0.16.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -1333,6 +1333,24 @@ def add_commit():
 
 # ---------------------------------------------------------------- api
 
+def token_required(fn):
+    """M6: авторизация API-запросов по device-токену (sync)."""
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        tok = request.args.get("token") or request.headers.get("X-Sync-Token", "")
+        if not tok:
+            return Response(json.dumps({"ok": False, "error": "token required"}, ensure_ascii=False),
+                            status=401, mimetype="application/json")
+        info = db.sync_token_validate(tok)
+        if not info:
+            return Response(json.dumps({"ok": False, "error": "invalid token"}, ensure_ascii=False),
+                            status=401, mimetype="application/json")
+        request.token_profile_id = info["profile_id"]  # type: ignore[attr-defined]
+        request.token_device_name = info["device_name"]  # type: ignore[attr-defined]
+        return fn(*args, **kwargs)
+    return wrapper
+
+
 def json_api(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
@@ -1523,6 +1541,38 @@ def api_book_share(book_id: int, token: str = ""):
         return {"ok": True, "token": new_token, "share_url": share_url}
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------- M6: sync API
+
+@app.get("/api/sync")
+@token_required
+def api_sync_get():
+    """M6: GET /api/sync?token=... — получить полное состояние профиля."""
+    state = db.sync_state_get(request.token_profile_id)
+    return {"ok": True, "state": state}
+
+
+@app.put("/api/sync")
+@token_required
+def api_sync_put():
+    """M6: PUT /api/sync?token=... — отправить состояние с клиента,
+    получить мерженое состояние (last-write-wins по timestamp)."""
+    payload = request.get_json(force=True) or {}
+    state = db.sync_state_merge(request.token_profile_id, payload)
+    return {"ok": True, "state": state}
+
+
+@app.post("/api/sync/token")
+@json_api
+def api_sync_token():
+    """M6: POST /api/sync/token — создать токен устройства.
+    Тело: {profile_id, device_name}"""
+    payload = request.get_json(force=True) or {}
+    pid = int(payload.get("profile_id", _profile_id()))
+    device = str(payload.get("device_name", "")).strip()[:64]
+    token = db.sync_token_create(pid, device)
+    return {"ok": True, "token": token}
 
 
 @app.post("/api/bookmark")

@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS settings (
 # ключ = номер версии, значение = SQL-скрипт апгрейда. Порядок применяется
 # по возрастанию, каждая миграция выполняется транзакционно и поднимает
 # PRAGMA user_version. SCHEMA — только для создания новой базы с нуля.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 MIGRATIONS: dict[int, str] = {
     2: """
@@ -139,6 +139,26 @@ MIGRATIONS: dict[int, str] = {
         token TEXT NOT NULL UNIQUE,
         created_at TEXT NOT NULL,
         expires_at TEXT
+    );
+    """,
+    # 10: M6 — синхронизация между устройствами (device tokens + sync API)
+    10: """
+    CREATE TABLE IF NOT EXISTS sync_tokens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        token TEXT NOT NULL UNIQUE,
+        device_name TEXT NOT NULL DEFAULT '',
+        profile_id INTEGER NOT NULL DEFAULT 1 REFERENCES profiles(id),
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        entity TEXT NOT NULL,
+        entity_id INTEGER NOT NULL,
+        profile_id INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(entity, entity_id, profile_id)
     );
     """,
 }
@@ -312,5 +332,173 @@ def save_setting(key: str, value: str) -> None:
             (key, value),
         )
         conn.commit()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------- M6: sync
+
+def sync_token_validate(token: str) -> dict | None:
+    """Валидирует токен устройства. Возвращает {profile_id, device_name} или None."""
+    conn = connect()
+    try:
+        row = conn.execute(
+            "UPDATE sync_tokens SET last_seen_at = ? WHERE token = ? RETURNING profile_id, device_name",
+            (now(), token),
+        ).fetchone()
+        if row:
+            conn.commit()
+            return {"profile_id": row["profile_id"], "device_name": row["device_name"] or "Устройство"}
+        return None
+    finally:
+        conn.close()
+
+
+def sync_token_create(profile_id: int, device_name: str) -> str:
+    """Создаёт новый токен устройства. Возвращает токен."""
+    import secrets
+    token = secrets.token_urlsafe(24)
+    conn = connect()
+    try:
+        conn.execute(
+            "INSERT INTO sync_tokens(token, profile_id, device_name, created_at) VALUES (?, ?, ?, ?)",
+            (token, profile_id, device_name, now()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return token
+
+
+def sync_state_get(profile_id: int) -> dict:
+    """Возвращает полное состояние для профиля: книги, главы, прогресс, заметки, рейтинги."""
+    conn = connect()
+    try:
+        books = [
+            dict(r) for r in conn.execute(
+                "SELECT id, title, author, cover, description, tags FROM books ORDER BY id"
+            ).fetchall()
+        ]
+        chapters = [
+            dict(r) for r in conn.execute(
+                "SELECT id, book_id, ord, title, words FROM chapters ORDER BY id"
+            ).fetchall()
+        ]
+        state = [
+            dict(r) for r in conn.execute(
+                "SELECT * FROM state WHERE profile_id = ?", (profile_id,)
+            ).fetchall()
+        ]
+        notes = [
+            dict(r) for r in conn.execute(
+                "SELECT * FROM notes WHERE profile_id = ?", (profile_id,)
+            ).fetchall()
+        ]
+        ratings = [
+            dict(r) for r in conn.execute(
+                "SELECT * FROM ratings WHERE profile_id = ?", (profile_id,)
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    return {
+        "profile_id": profile_id,
+        "books": books,
+        "chapters": chapters,
+        "state": state,
+        "notes": notes,
+        "ratings": ratings,
+        "server_time": now(),
+    }
+
+
+def sync_state_merge(profile_id: int, client_state: dict) -> dict:
+    """Принимает состояние от клиента, мержит с серверным (last-write-wins),
+    возвращает итоговое состояние."""
+    conn = connect()
+    try:
+        now_ts = now()
+
+        # books — read-only при sync, не мержим
+
+        # state — last-write-wins по chapter_id+profile_id
+        for s in client_state.get("state", []):
+            cid = s.get("chapter_id")
+            if not cid:
+                continue
+            existing = conn.execute(
+                "SELECT read_pct, done, bookmark, last_read_at FROM state "
+                "WHERE chapter_id = ? AND profile_id = ?",
+                (cid, profile_id),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """INSERT INTO state(chapter_id, profile_id, read_pct, done, bookmark,
+                       bookmark_quote, last_read_at)
+                       VALUES (?,?,?,?,?,?,?)""",
+                    (cid, profile_id, s.get("read_pct", 0), s.get("done", 0),
+                     s.get("bookmark", 0), s.get("bookmark_quote", ""),
+                     s.get("last_read_at") or now_ts),
+                )
+            else:
+                # last-write-wins: клиент побеждает если его timestamp новее
+                client_ts = s.get("last_read_at", "")
+                server_ts = existing["last_read_at"] or ""
+                if client_ts and (not server_ts or client_ts > server_ts):
+                    conn.execute(
+                        """UPDATE state SET read_pct = ?, done = ?, bookmark = ?,
+                           bookmark_quote = ?, last_read_at = ?
+                           WHERE chapter_id = ? AND profile_id = ?""",
+                        (s.get("read_pct", 0), s.get("done", 0), s.get("bookmark", 0),
+                         s.get("bookmark_quote", ""), client_ts, cid, profile_id),
+                    )
+
+        # notes — last-write-wins по id (edited_at)
+        for n in client_state.get("notes", []):
+            nid = n.get("id")
+            if not nid:
+                continue
+            existing = conn.execute(
+                "SELECT edited_at FROM notes WHERE id = ? AND profile_id = ?",
+                (nid, profile_id),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """INSERT INTO notes(id, chapter_id, profile_id, text, rating, quote,
+                       parent_id, created_at, edited_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (nid, n.get("chapter_id"), profile_id, n.get("text", ""),
+                     n.get("rating", 0), n.get("quote", ""),
+                     n.get("parent_id"), n.get("created_at") or now_ts,
+                     n.get("edited_at") or now_ts),
+                )
+            else:
+                client_ts = n.get("edited_at", "")
+                server_ts = existing["edited_at"] or ""
+                if client_ts and (not server_ts or client_ts > server_ts):
+                    conn.execute(
+                        """UPDATE notes SET text = ?, rating = ?, quote = ?,
+                           parent_id = ?, edited_at = ?
+                           WHERE id = ? AND profile_id = ?""",
+                        (n.get("text", ""), n.get("rating", 0), n.get("quote", ""),
+                         n.get("parent_id"), client_ts, nid, profile_id),
+                    )
+
+        # ratings — last-write-wins по target+target_id+profile_id
+        for r in client_state.get("ratings", []):
+            t = r.get("target")
+            tid = r.get("target_id")
+            if not t or not tid:
+                continue
+            val = r.get("value", 0)
+            conn.execute(
+                """INSERT INTO ratings(target, target_id, profile_id, value)
+                   VALUES (?,?,?,?)
+                   ON CONFLICT(target, target_id, profile_id) DO UPDATE SET value = ?""",
+                (t, tid, profile_id, val, val),
+            )
+
+        conn.commit()
+        return sync_state_get(profile_id)
     finally:
         conn.close()

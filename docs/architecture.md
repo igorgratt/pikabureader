@@ -76,6 +76,9 @@ settings(key PK, value)   -- theme, font, size, width
 | GET | `/api/book/<book_id>/share` | JSON: список токенов шеринга книги (D7) |
 | POST | `/api/book/<book_id>/share` | JSON: создать токен шеринга, вернуть ссылку (D7) |
 | DELETE | `/api/book/<book_id>/share/<token>` | JSON: отозвать токен шеринга (D7) |
+| GET | `/api/sync?token=…` | JSON: полное состояние профиля (books, chapters, state, notes, ratings) (M6) |
+| PUT | `/api/sync?token=…` | JSON: запушить состояние клиента, получить мерженое (M6, last-write-wins) |
+| POST | `/api/sync/token` | JSON: создать device-токен для sync (M6) |
 | GET | `/book/<id>` | Страница книги с оглавлением |
 | GET | `/story/<id>` | Страница главы + заметки |
 | GET | `/goto/<book_id>/<path>` | Внутрикнижная ссылка (сноска): редирект на главу с якорем `?frag=`, файл не импортирован — на первую главу книги |
