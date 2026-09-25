@@ -16,6 +16,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "UPLOAD_DIR", str(tmp_path / "uploads"))
     monkeypatch.setattr(app_module, "IMG_DIR", str(tmp_path / "images"))
     monkeypatch.setattr(app_module, "COVER_DIR", str(tmp_path / "covers"))
+    monkeypatch.setattr(app_module, "IMPORT_LOG", str(tmp_path / "import.log"))
     db.init_db()
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as c:
@@ -158,3 +159,170 @@ def test_restore_rejects_non_zip(client):
         content_type="multipart/form-data",
     )
     assert r.status_code == 302
+
+
+# ---------------------------------------------------------------- D3: пароль
+
+def test_password_gate(client):
+    # пароль не задан — доступ открыт
+    assert client.get("/").status_code == 200
+    # задаём пароль через панель (сразу логинит)
+    r = client.post(
+        "/admin", data={"action": "set_password", "password": "secret"}
+    )
+    assert r.status_code == 302
+    client.get("/logout")
+    # теперь лента требует входа
+    r = client.get("/", follow_redirects=False)
+    assert r.status_code == 302 and "/login" in r.headers["Location"]
+    # неверный пароль — остаёмся на форме
+    r = client.post("/login", data={"password": "wrong"})
+    assert r.status_code == 200 and "Неверный пароль" in r.get_data(as_text=True)
+    # верный пароль — редирект и доступ
+    r = client.post("/login", data={"password": "secret"}, follow_redirects=False)
+    assert r.status_code == 302
+    assert client.get("/").status_code == 200
+    # выход → API отвечает 401
+    client.get("/logout")
+    r = client.get("/api/settings")
+    assert r.status_code == 401
+    assert r.get_json()["error"] == "unauthorized"
+
+
+def test_login_open_when_no_password(client):
+    r = client.get("/login")
+    assert r.status_code == 200
+
+
+# ---------------------------------------------------------------- D2: профили
+
+def test_profiles_isolate_progress(client):
+    cid = seed()
+    # профиль по умолчанию читает и пишет заметку
+    client.post("/api/progress", json={"chapter_id": cid, "pct": 50, "done": 0})
+    client.post("/api/note", json={"chapter_id": cid, "text": "заметка первого"})
+    page = client.get(f"/story/{cid}").get_data(as_text=True)
+    assert 'data-read-pct="50"' in page
+    assert "заметка первого" in page
+
+    # создаём второго читателя и переключаемся
+    client.post("/profiles", data={"action": "create", "name": "Второй"})
+    conn = db.connect()
+    try:
+        pid2 = conn.execute(
+            "SELECT id FROM profiles WHERE name = 'Второй'"
+        ).fetchone()["id"]
+    finally:
+        conn.close()
+    client.post("/profiles", data={"action": "select", "id": str(pid2)})
+    # у второго свой прогресс и свои заметки
+    page = client.get(f"/story/{cid}").get_data(as_text=True)
+    assert 'data-read-pct="0"' in page
+    assert "заметка первого" not in page
+    # вернулись к первому — всё на месте
+    client.post("/profiles", data={"action": "select", "id": "1"})
+    page = client.get(f"/story/{cid}").get_data(as_text=True)
+    assert 'data-read-pct="50"' in page
+    assert "заметка первого" in page
+
+
+def test_profiles_create_rename_delete(client):
+    client.post("/profiles", data={"action": "create", "name": "Мама"})
+    client.post("/profiles", data={"action": "create", "name": "Мама"})  # дубль
+    conn = db.connect()
+    try:
+        n = conn.execute("SELECT COUNT(*) c FROM profiles").fetchone()["c"]
+        pid = conn.execute("SELECT id FROM profiles WHERE name = 'Мама'").fetchone()["id"]
+    finally:
+        conn.close()
+    assert n == 2  # дубль не создан
+    client.post("/profiles", data={"action": "rename", "id": str(pid), "name": "Папа"})
+    # последний профиль удалить нельзя (сначала тест reset на Мама/Папа)
+    client.post("/profiles", data={"action": "delete", "id": str(pid)})
+    conn = db.connect()
+    try:
+        n = conn.execute("SELECT COUNT(*) c FROM profiles").fetchone()["c"]
+        names = [r["name"] for r in conn.execute("SELECT name FROM profiles")]
+    finally:
+        conn.close()
+    assert n == 1 and "Папа" not in names
+    # нельзя удалить последний
+    client.post("/profiles", data={"action": "delete", "id": "1"})
+    conn = db.connect()
+    try:
+        n = conn.execute("SELECT COUNT(*) c FROM profiles").fetchone()["c"]
+    finally:
+        conn.close()
+    assert n == 1
+
+
+def test_ratings_one_vote_per_profile(client):
+    cid = seed()
+    r = client.post("/api/rate", json={"target": "chapter", "id": cid, "delta": 1})
+    assert r.get_json()["rating"] == 1 and r.get_json()["mine"] == 1
+    # повторный плюс не задваивает
+    r = client.post("/api/rate", json={"target": "chapter", "id": cid, "delta": 1})
+    assert r.get_json()["rating"] == 1 and r.get_json()["mine"] == 1
+    # минус забирает голос обратно
+    r = client.post("/api/rate", json={"target": "chapter", "id": cid, "delta": -1})
+    assert r.get_json()["rating"] == 0 and r.get_json()["mine"] == 0
+
+
+# ---------------------------------------------------------------- D4: передача библиотеки
+
+def test_library_share_roundtrip(client):
+    seed()
+    r = client.get("/api/library.zip?ids=1")
+    assert r.status_code == 200 and r.mimetype == "application/zip"
+    with zipfile.ZipFile(io.BytesIO(r.data)) as zf:
+        manifest = __import__("json").loads(zf.read("manifest.json"))
+    assert manifest["format"] == "pikabureader-library"
+    assert manifest["books"][0]["title"] == "Тест"
+    exported = r.data
+
+    # удаляем локально и импортируем от «друга»
+    conn = db.connect()
+    try:
+        conn.execute("DELETE FROM books")
+        conn.commit()
+    finally:
+        conn.close()
+    r = client.post(
+        "/api/library/import",
+        data={"file": (io.BytesIO(exported), "lib.zip")},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 302
+    # id главы мог измениться — смотрим ленту
+    feed = client.get("/?q=Тест").get_data(as_text=True)
+    assert "Тест" in feed
+    # повторный импорт — дубли не создаются
+    r = client.post(
+        "/api/library/import",
+        data={"file": (io.BytesIO(exported), "lib.zip")},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 302
+    conn = db.connect()
+    try:
+        n = conn.execute("SELECT COUNT(*) c FROM books").fetchone()["c"]
+    finally:
+        conn.close()
+    assert n == 1
+
+
+def test_library_export_requires_selection(client):
+    r = client.get("/api/library.zip")
+    assert r.status_code == 302  # flash «Отметьте книги»
+
+
+def test_import_log_written(client):
+    import os
+
+    seed()
+    client.get("/api/library.zip?ids=1")
+    import app as app_module
+    assert os.path.exists(app_module.IMPORT_LOG)
+    with open(app_module.IMPORT_LOG, encoding="utf-8") as f:
+        content = f.read()
+    assert "export" in content and "Тест" in content

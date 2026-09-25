@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS settings (
 # ключ = номер версии, значение = SQL-скрипт апгрейда. Порядок применяется
 # по возрастанию, каждая миграция выполняется транзакционно и поднимает
 # PRAGMA user_version. SCHEMA — только для создания новой базы с нуля.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 MIGRATIONS: dict[int, str] = {
     2: """
@@ -69,6 +69,44 @@ MIGRATIONS: dict[int, str] = {
     3: """
     ALTER TABLE notes ADD COLUMN quote TEXT NOT NULL DEFAULT '';
     ALTER TABLE notes ADD COLUMN edited_at TEXT NOT NULL DEFAULT '';
+    """,
+    # 4: профили читателей (D2) — свой прогресс, заметки и оценки у каждого
+    4: """
+    CREATE TABLE IF NOT EXISTS profiles (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL
+    );
+    INSERT OR IGNORE INTO profiles(id, name, created_at)
+        VALUES (1, 'Я', datetime('now'));
+
+    ALTER TABLE notes ADD COLUMN profile_id INTEGER NOT NULL DEFAULT 1;
+
+    CREATE TABLE IF NOT EXISTS ratings (
+        target TEXT NOT NULL,
+        target_id INTEGER NOT NULL,
+        profile_id INTEGER NOT NULL,
+        value INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (target, target_id, profile_id)
+    );
+    INSERT OR IGNORE INTO ratings(target, target_id, profile_id, value)
+        SELECT 'chapter', id, 1, rating FROM chapters WHERE rating != 0;
+    INSERT OR IGNORE INTO ratings(target, target_id, profile_id, value)
+        SELECT 'note', id, 1, rating FROM notes WHERE rating != 0;
+
+    CREATE TABLE state_profiled (
+        chapter_id INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        profile_id INTEGER NOT NULL,
+        bookmark INTEGER NOT NULL DEFAULT 0,
+        done INTEGER NOT NULL DEFAULT 0,
+        read_pct INTEGER NOT NULL DEFAULT 0,
+        last_read_at TEXT,
+        PRIMARY KEY (chapter_id, profile_id)
+    );
+    INSERT INTO state_profiled(chapter_id, profile_id, bookmark, done, read_pct, last_read_at)
+        SELECT chapter_id, 1, bookmark, done, read_pct, last_read_at FROM state;
+    DROP TABLE state;
+    ALTER TABLE state_profiled RENAME TO state;
     """,
 }
 
@@ -128,6 +166,34 @@ def schema_version() -> int:
     conn = connect()
     try:
         return conn.execute("PRAGMA user_version").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def reindex_fts() -> int:
+    """Полная переиндексация FTS (D10: кнопка в панели владельца)."""
+    conn = connect()
+    try:
+        conn.execute("DELETE FROM chapters_fts")
+        _reindex_fts(conn)
+        conn.commit()
+        return conn.execute("SELECT COUNT(*) c FROM chapters_fts").fetchone()["c"]
+    finally:
+        conn.close()
+
+
+def default_profile_id() -> int:
+    conn = connect()
+    try:
+        row = conn.execute("SELECT id FROM profiles ORDER BY id LIMIT 1").fetchone()
+        if row is None:
+            conn.execute(
+                "INSERT OR IGNORE INTO profiles(id, name, created_at) VALUES (1, 'Я', ?)",
+                (now(),),
+            )
+            conn.commit()
+            return 1
+        return row["id"]
     finally:
         conn.close()
 

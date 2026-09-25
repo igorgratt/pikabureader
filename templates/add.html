@@ -4,14 +4,14 @@
 {% block content %}
 <div class="add-box">
   <h1>Добавить книгу</h1>
-  <p class="add-sub">Поддерживаются EPUB и FB2. Книга превратится в «сообщество», а главы — в «посты» ленты.</p>
+  <p class="add-sub">Поддерживаются EPUB, FB2 и PDF. Книга превратится в «сообщество», а главы — в «посты» ленты.</p>
 
   <form class="dropzone" id="add-form" method="post" action="{{ url_for('add') }}" enctype="multipart/form-data">
-    <input type="file" name="file" id="file-input" accept=".epub,.fb2,.zip" hidden required>
+    <input type="file" name="file" id="file-input" accept=".epub,.fb2,.zip,.pdf" hidden required>
     <div class="dropzone-inner" id="dropzone">
       <div class="dropzone-icon">📚</div>
       <div class="dropzone-text">Перетащите файл сюда<br>или <span class="dropzone-link">выберите файл</span></div>
-      <div class="dropzone-hint">EPUB, FB2 · до 200 МБ</div>
+      <div class="dropzone-hint">EPUB, FB2, PDF · до 200 МБ</div>
     </div>
     <button class="btn btn-accent btn-big" type="submit" id="submit-btn" disabled>Загрузить</button>
     <div class="upload-progress" id="upload-progress" hidden>
@@ -19,6 +19,21 @@
       <span id="upload-label">Загрузка…</span>
     </div>
   </form>
+
+  <section class="settings-card import-share">
+    <h2 class="settings-title">Импорт библиотеки от друга</h2>
+    <p class="settings-desc">
+      Архив <code>pikabu-library.zip</code>, выгруженный в «Библиотеке» на другом сервере
+      (книги с картинками, без прогресса и заметок).
+    </p>
+    <form method="post" action="{{ url_for('library_import') }}" enctype="multipart/form-data">
+      <label class="restore-label">
+        Файл библиотеки
+        <input type="file" name="file" accept=".zip" required>
+      </label>
+      <button class="btn btn-accent" type="submit">Импортировать</button>
+    </form>
+  </section>
 </div>
 {% endblock %}
 {% block scripts %}

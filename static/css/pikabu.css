@@ -593,6 +593,87 @@ kbd {
   padding: 1px 6px; font-size: 12px; font-family: inherit;
 }
 
+/* ---------------- login ---------------- */
+.login-page {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; background: var(--bg);
+}
+.login-card {
+  width: min(360px, 92vw); background: var(--card);
+  border-radius: 14px; padding: 30px 26px;
+  box-shadow: var(--shadow); text-align: center;
+}
+.login-logo { font-size: 22px; font-weight: 800; margin-bottom: 18px; }
+.login-label {
+  display: block; text-align: left; font-size: 13px;
+  color: var(--text-2); margin-bottom: 6px;
+}
+.login-input {
+  width: 100%; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text);
+  font: inherit; padding: 10px 12px; margin-bottom: 12px;
+}
+.login-btn { width: 100%; padding: 10px; }
+.login-hint { color: var(--text-2); font-size: 13px; margin: 14px 0 0; }
+
+/* ---------------- profiles ---------------- */
+.profiles-list { margin-bottom: 16px; }
+.profile-card {
+  background: var(--card); border-radius: 12px;
+  padding: 14px 16px; margin-bottom: 10px; box-shadow: var(--shadow);
+  display: flex; align-items: center; gap: 14px;
+  flex-wrap: wrap; border: 1px solid transparent;
+}
+.profile-card.is-current { border-color: var(--accent); }
+.profile-main { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 200px; }
+.profile-avatar {
+  width: 42px; height: 42px; border-radius: 50%;
+  background: var(--accent); color: #1a1a1a;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 18px;
+}
+.profile-info b { display: block; font-size: 15px; }
+.profile-info i { font-style: normal; color: var(--text-2); font-size: 13px; }
+.profile-badge {
+  background: rgba(255, 214, 0, .2); color: var(--text);
+  font-size: 13px; padding: 5px 10px; border-radius: 14px;
+}
+.profile-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.profile-form { display: flex; gap: 6px; align-items: center; }
+.profile-name-input {
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--bg); color: var(--text);
+  font: inherit; font-size: 14px; padding: 7px 10px; width: 130px;
+}
+.btn-danger { color: var(--red); border-color: var(--red); }
+.admin-form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.admin-form .login-input { width: auto; min-width: 220px; margin-bottom: 0; }
+.admin-subtitle { font-size: 14px; margin: 16px 0 8px; }
+.import-log {
+  background: var(--bg); border-radius: 8px; padding: 10px 12px;
+  max-height: 240px; overflow-y: auto;
+}
+.import-log-line {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px; color: var(--text-2); padding: 2px 0;
+  border-bottom: 1px dashed var(--border);
+}
+
+/* ---------------- D4: библиотека — экспорт ---------------- */
+.library-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap; margin-bottom: 14px;
+}
+.lib-selectable { position: relative; }
+.lib-check {
+  position: absolute; top: 8px; left: 8px; z-index: 2;
+  width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer;
+}
+.lib-link { display: block; color: inherit; text-decoration: none; }
+.lib-link:hover { text-decoration: none; }
+.import-share { margin-top: 18px; }
+.import-share form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+
 /* ---------------- responsive ---------------- */
 .tabbar { display: none; }
 .topbar { transition: transform .2s; }

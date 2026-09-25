@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -7,25 +9,108 @@ from functools import wraps
 from html import escape as _escape
 
 from flask import (Flask, Response, abort, flash, redirect, render_template,
-                   request, send_file, send_from_directory, url_for)
+                   request, send_file, send_from_directory, session, url_for)
 
 import db
 from parsers import parse_book
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
 IMG_DIR = os.path.join(db.DATA_DIR, "images")
 COVER_DIR = os.path.join(db.DATA_DIR, "covers")
+IMPORT_LOG = os.path.join(db.DATA_DIR, "import.log")
 
 app = Flask(__name__)
-app.secret_key = "pikabureader-local"
+app.secret_key = os.environ.get("SECRET_KEY", "pikabureader-local")
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 
 
 def get_db() -> sqlite3.Connection:
     return db.connect()
+
+
+# ---------------------------------------------------------------- D3: пароль
+
+def _hash_password(password: str, salt: str) -> str:
+    return hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), salt.encode(), 120_000
+    ).hex()
+
+
+def _set_password(password: str) -> None:
+    """Задать пароль инстанса; пустая строка — снять пароль."""
+    if not password:
+        db.save_setting("password_hash", "")
+        return
+    salt = uuid.uuid4().hex[:16]
+    db.save_setting("password_hash", f"{salt}:{_hash_password(password, salt)}")
+
+
+def _check_password(stored: str, password: str) -> bool:
+    salt, _, expected = stored.partition(":")
+    if not salt or not expected:
+        return False
+    return hmac.compare_digest(_hash_password(password, salt), expected)
+
+
+@app.before_request
+def _gate():
+    """Доступ к инстансу: если задан пароль — требуется вход (D3)."""
+    ep = request.endpoint
+    if ep in ("static", "login", "logout"):
+        return None
+    stored = db.get_settings().get("password_hash", "")
+    if not stored or session.get("owner"):
+        return None
+    if request.path.startswith("/api/"):
+        return Response(
+            json.dumps({"ok": False, "error": "unauthorized"}, ensure_ascii=False),
+            status=401, mimetype="application/json",
+        )
+    return redirect(url_for("login", next=request.path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        stored = db.get_settings().get("password_hash", "")
+        if stored and _check_password(stored, password):
+            session["owner"] = 1
+            nxt = request.args.get("next") or ""
+            if nxt.startswith("/") and not nxt.startswith("//"):
+                return redirect(nxt)
+            return redirect(url_for("feed"))
+        flash("Неверный пароль")
+    return render_template("login.html", next=request.args.get("next", ""))
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
+# ---------------------------------------------------------------- D2: профили
+
+def _profile_id() -> int:
+    pid = session.get("profile_id")
+    if pid:
+        return int(pid)
+    pid = db.default_profile_id()
+    session["profile_id"] = pid
+    return pid
+
+
+def _profile_name(pid: int) -> str:
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT name FROM profiles WHERE id = ?", (pid,)).fetchone()
+        return row["name"] if row else "Я"
+    finally:
+        conn.close()
 
 
 @app.template_filter("pct")
@@ -50,15 +135,18 @@ def num(value) -> str:
 @app.context_processor
 def inject_globals():
     conn = get_db()
+    pid = _profile_id()
     try:
         counts = {
             "feed": conn.execute("SELECT COUNT(*) c FROM chapters").fetchone()["c"],
             "books": conn.execute("SELECT COUNT(*) c FROM books").fetchone()["c"],
             "bookmarks": conn.execute(
-                "SELECT COUNT(*) c FROM state WHERE bookmark = 1"
+                "SELECT COUNT(*) c FROM state WHERE bookmark = 1 AND profile_id = ?",
+                (pid,),
             ).fetchone()["c"],
             "reading": conn.execute(
-                "SELECT COUNT(*) c FROM state WHERE done = 0 AND read_pct > 0"
+                "SELECT COUNT(*) c FROM state WHERE done = 0 AND read_pct > 0 AND profile_id = ?",
+                (pid,),
             ).fetchone()["c"],
         }
         books = conn.execute("SELECT * FROM books ORDER BY id DESC").fetchall()
@@ -71,8 +159,12 @@ def inject_globals():
             """SELECT c.id, c.title, b.title bt, s.read_pct
                FROM state s JOIN chapters c ON c.id = s.chapter_id
                JOIN books b ON b.id = c.book_id
-               WHERE s.done = 0 AND s.read_pct > 0
-               ORDER BY s.last_read_at DESC LIMIT 5"""
+               WHERE s.done = 0 AND s.read_pct > 0 AND s.profile_id = ?
+               ORDER BY s.last_read_at DESC LIMIT 5""",
+            (pid,),
+        ).fetchall()
+        profiles = conn.execute(
+            "SELECT id, name FROM profiles ORDER BY id"
         ).fetchall()
     finally:
         conn.close()
@@ -85,6 +177,8 @@ def inject_globals():
         "settings": db.get_settings(), "books": books,
         "popular": popular, "reading": reading,
         "app_version": __version__,
+        "profiles": profiles, "current_profile": pid,
+        "profile_name": _profile_name(pid),
     }
 
 
@@ -145,6 +239,7 @@ def _search_chapters(conn, q: str, limit: int = 8):
 
 def _render_feed(conn, order: str, page: int, q: str = "", per_page: int = 10):
     offset = (page - 1) * per_page
+    pid = _profile_id()
     where = ""
     params: list = []
     if q:
@@ -160,15 +255,16 @@ def _render_feed(conn, order: str, page: int, q: str = "", per_page: int = 10):
     sql = f"""
         SELECT c.*, b.title book_title, b.author, b.cover, b.id bid,
                s.read_pct, s.bookmark, s.done,
-               (SELECT COUNT(*) FROM notes n WHERE n.chapter_id = c.id) note_count
+               (SELECT COUNT(*) FROM notes n WHERE n.chapter_id = c.id
+                    AND n.profile_id = ?) note_count
         FROM chapters c JOIN books b ON b.id = c.book_id
-        LEFT JOIN state s ON s.chapter_id = c.id
+        LEFT JOIN state s ON s.chapter_id = c.id AND s.profile_id = ?
         {where}
         ORDER BY {order_by} LIMIT ? OFFSET ?
     """
-    rows = conn.execute(sql, (*params, per_page, offset)).fetchall()
-    count_sql = f"SELECT COUNT(*) c FROM chapters c JOIN books b ON b.id = c.book_id LEFT JOIN state s ON s.chapter_id = c.id {where}"
-    total = conn.execute(count_sql, params).fetchone()["c"]
+    rows = conn.execute(sql, (pid, pid, *params, per_page, offset)).fetchall()
+    count_sql = f"SELECT COUNT(*) c FROM chapters c JOIN books b ON b.id = c.book_id LEFT JOIN state s ON s.chapter_id = c.id AND s.profile_id = ? {where}"
+    total = conn.execute(count_sql, (pid, *params)).fetchone()["c"]
     return rows, total
 
 
@@ -206,7 +302,9 @@ def bookmarks():
                       s.read_pct, s.bookmark, s.done
                FROM state s JOIN chapters c ON c.id = s.chapter_id
                JOIN books b ON b.id = c.book_id
-               WHERE s.bookmark = 1 ORDER BY s.last_read_at DESC"""
+               WHERE s.bookmark = 1 AND s.profile_id = ?
+               ORDER BY s.last_read_at DESC""",
+            (_profile_id(),),
         ).fetchall()
     finally:
         conn.close()
@@ -218,39 +316,41 @@ def bookmarks():
 @app.route("/book/<int:book_id>")
 def book_page(book_id: int):
     conn = get_db()
+    pid = _profile_id()
     try:
         book = conn.execute("SELECT * FROM books WHERE id = ?", (book_id,)).fetchone()
         if book is None:
             abort(404)
         rows = conn.execute(
             """SELECT c.*, s.read_pct, s.bookmark, s.done
-               FROM chapters c LEFT JOIN state s ON s.chapter_id = c.id
+               FROM chapters c
+               LEFT JOIN state s ON s.chapter_id = c.id AND s.profile_id = ?
                WHERE c.book_id = ? ORDER BY c.ord""",
-            (book_id,),
+            (pid, book_id),
         ).fetchall()
         progress = conn.execute(
             """SELECT COALESCE(SUM(s.done), 0) done, COUNT(*) total
-               FROM chapters c LEFT JOIN state s ON s.chapter_id = c.id
+               FROM chapters c LEFT JOIN state s ON s.chapter_id = c.id AND s.profile_id = ?
                WHERE c.book_id = ?""",
-            (book_id,),
+            (pid, book_id),
         ).fetchone()
         # M9: куда вести «Продолжить чтение»
         resume = conn.execute(
             """SELECT c.id FROM chapters c
-               JOIN state s ON s.chapter_id = c.id
+               JOIN state s ON s.chapter_id = c.id AND s.profile_id = ?
                WHERE c.book_id = ? AND s.done = 0 AND s.read_pct > 0
                ORDER BY s.last_read_at DESC LIMIT 1""",
-            (book_id,),
+            (pid, book_id),
         ).fetchone()
         resume_id = resume["id"] if resume else None
         resume_label = "Продолжить чтение" if resume else ""
         if resume_id is None:
             nxt_unread = conn.execute(
                 """SELECT c.id FROM chapters c
-                   LEFT JOIN state s ON s.chapter_id = c.id
+                   LEFT JOIN state s ON s.chapter_id = c.id AND s.profile_id = ?
                    WHERE c.book_id = ? AND COALESCE(s.done, 0) = 0
                    ORDER BY c.ord LIMIT 1""",
-                (book_id,),
+                (pid, book_id),
             ).fetchone()
             if nxt_unread:
                 resume_id = nxt_unread["id"]
@@ -277,14 +377,15 @@ def book_page(book_id: int):
 @app.route("/story/<int:chapter_id>")
 def story(chapter_id: int):
     conn = get_db()
+    pid = _profile_id()
     try:
         ch = conn.execute(
             """SELECT c.*, b.title book_title, b.author, b.cover, b.id bid,
                       s.read_pct, s.bookmark, s.done
                FROM chapters c JOIN books b ON b.id = c.book_id
-               LEFT JOIN state s ON s.chapter_id = c.id
+               LEFT JOIN state s ON s.chapter_id = c.id AND s.profile_id = ?
                WHERE c.id = ?""",
-            (chapter_id,),
+            (pid, chapter_id),
         ).fetchone()
         if ch is None:
             abort(404)
@@ -297,8 +398,8 @@ def story(chapter_id: int):
             (ch["bid"], ch["ord"]),
         ).fetchone()
         notes = conn.execute(
-            "SELECT * FROM notes WHERE chapter_id = ? ORDER BY id",
-            (chapter_id,),
+            "SELECT * FROM notes WHERE chapter_id = ? AND profile_id = ? ORDER BY id",
+            (chapter_id, pid),
         ).fetchall()
         total = conn.execute(
             "SELECT COUNT(*) c FROM chapters WHERE book_id = ?", (ch["bid"],)
@@ -306,9 +407,10 @@ def story(chapter_id: int):
         # N3: оглавление книги с прогрессом по главам
         toc = conn.execute(
             """SELECT c.id, c.ord, c.title, s.read_pct, s.done
-               FROM chapters c LEFT JOIN state s ON s.chapter_id = c.id
+               FROM chapters c
+               LEFT JOIN state s ON s.chapter_id = c.id AND s.profile_id = ?
                WHERE c.book_id = ? ORDER BY c.ord""",
-            (ch["bid"],),
+            (pid, ch["bid"]),
         ).fetchall()
     finally:
         conn.close()
@@ -447,17 +549,39 @@ def api_rate():
     tid = int(payload.get("id", 0))
     if target not in ("chapter", "note") or delta not in (-1, 1) or tid <= 0:
         raise ValueError("bad payload")
+    pid = _profile_id()
+    table = "chapters" if target == "chapter" else "notes"
     conn = get_db()
     try:
-        table = "chapters" if target == "chapter" else "notes"
-        conn.execute(f"UPDATE {table} SET rating = rating + ? WHERE id = ?", (delta, tid))
+        # свой голос профиля: один плюс или один минус (D2)
+        row = conn.execute(
+            "SELECT value FROM ratings WHERE target = ? AND target_id = ? AND profile_id = ?",
+            (target, tid, pid),
+        ).fetchone()
+        mine = max(-1, min(1, (row["value"] if row else 0) + delta)) if row else delta
+        conn.execute(
+            """INSERT INTO ratings(target, target_id, profile_id, value)
+               VALUES(?,?,?,?)
+               ON CONFLICT(target, target_id, profile_id) DO UPDATE SET value = excluded.value""",
+            (target, tid, pid, mine),
+        )
+        # агрегат по всем профилям → колонка rating
+        conn.execute(
+            f"""UPDATE {table} SET rating =
+                    (SELECT COALESCE(SUM(value), 0) FROM ratings
+                     WHERE target = ? AND target_id = ?)
+                WHERE id = ?""",
+            (target, tid, tid),
+        )
         conn.commit()
-        row = conn.execute(f"SELECT rating FROM {table} WHERE id = ?", (tid,)).fetchone()
+        agg = conn.execute(
+            f"SELECT rating FROM {table} WHERE id = ?", (tid,)
+        ).fetchone()
     finally:
         conn.close()
-    if row is None:
+    if agg is None:
         raise ValueError("not found")
-    return {"ok": True, "rating": row["rating"]}
+    return {"ok": True, "rating": agg["rating"], "mine": mine}
 
 
 @app.post("/api/progress")
@@ -467,16 +591,17 @@ def api_progress():
     cid = int(payload.get("chapter_id", 0))
     pct_ = max(0, min(100, int(payload.get("pct", 0))))
     done = 1 if payload.get("done") else 0
+    pid = _profile_id()
     conn = get_db()
     try:
         conn.execute(
-            """INSERT INTO state(chapter_id, read_pct, done, last_read_at)
-               VALUES(?,?,?,?)
-               ON CONFLICT(chapter_id) DO UPDATE SET
+            """INSERT INTO state(chapter_id, profile_id, read_pct, done, last_read_at)
+               VALUES(?,?,?,?,?)
+               ON CONFLICT(chapter_id, profile_id) DO UPDATE SET
                  read_pct = MAX(state.read_pct, excluded.read_pct),
                  done = MAX(state.done, excluded.done),
                  last_read_at = excluded.last_read_at""",
-            (cid, pct_, done, db.now()),
+            (cid, pid, pct_, done, db.now()),
         )
         conn.commit()
     finally:
@@ -489,16 +614,20 @@ def api_progress():
 def api_bookmark():
     payload = request.get_json(force=True)
     cid = int(payload.get("chapter_id", 0))
+    pid = _profile_id()
     conn = get_db()
     try:
         conn.execute(
-            """INSERT INTO state(chapter_id, bookmark, last_read_at)
-               VALUES(?,1,?) ON CONFLICT(chapter_id)
+            """INSERT INTO state(chapter_id, profile_id, bookmark, last_read_at)
+               VALUES(?,?,1,?) ON CONFLICT(chapter_id, profile_id)
                DO UPDATE SET bookmark = 1 - state.bookmark, last_read_at = excluded.last_read_at""",
-            (cid, db.now()),
+            (cid, pid, db.now()),
         )
         conn.commit()
-        row = conn.execute("SELECT bookmark FROM state WHERE chapter_id = ?", (cid,)).fetchone()
+        row = conn.execute(
+            "SELECT bookmark FROM state WHERE chapter_id = ? AND profile_id = ?",
+            (cid, pid),
+        ).fetchone()
     finally:
         conn.close()
     return {"ok": True, "bookmark": bool(row and row["bookmark"])}
@@ -515,12 +644,13 @@ def api_note():
     quote = (payload.get("quote") or "").strip()[:300]
     if not text or cid <= 0:
         raise ValueError("empty note")
+    pid = _profile_id()
     conn = get_db()
     try:
         cur = conn.execute(
-            "INSERT INTO notes(chapter_id, parent_id, text, quote, created_at) "
-            "VALUES(?,?,?,?,?)",
-            (cid, int(parent) if parent else None, text, quote, db.now()),
+            "INSERT INTO notes(chapter_id, parent_id, text, quote, profile_id, created_at) "
+            "VALUES(?,?,?,?,?,?)",
+            (cid, int(parent) if parent else None, text, quote, pid, db.now()),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM notes WHERE id = ?", (cur.lastrowid,)).fetchone()
@@ -541,8 +671,8 @@ def api_note_edit():
     conn = get_db()
     try:
         cur = conn.execute(
-            "UPDATE notes SET text = ?, edited_at = ? WHERE id = ?",
-            (text, db.now(), nid),
+            "UPDATE notes SET text = ?, edited_at = ? WHERE id = ? AND profile_id = ?",
+            (text, db.now(), nid, _profile_id()),
         )
         conn.commit()
         if cur.rowcount == 0:
@@ -560,7 +690,10 @@ def api_note_delete():
     nid = int(payload.get("id", 0))
     conn = get_db()
     try:
-        conn.execute("DELETE FROM notes WHERE id = ?", (nid,))
+        conn.execute(
+            "DELETE FROM notes WHERE id = ? AND profile_id = ?",
+            (nid, _profile_id()),
+        )
         conn.commit()
     finally:
         conn.close()
@@ -731,6 +864,326 @@ def backup_restore():
         return redirect(url_for("feed"))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- Q6: лог импорта
+
+def _log_import(action: str, detail: str) -> None:
+    try:
+        os.makedirs(db.DATA_DIR, exist_ok=True)
+        with open(IMPORT_LOG, "a", encoding="utf-8") as f:
+            f.write(f"{db.now()} | {action} | {detail}\n")
+    except OSError:
+        pass
+
+
+# ---------------------------------------------------------------- D2: UI профилей
+
+@app.route("/profiles", methods=["GET", "POST"])
+def profiles_page():
+    if request.method == "POST":
+        action = request.form.get("action", "")
+        name = (request.form.get("name") or "").strip()[:40]
+        pid_in = request.form.get("id", "")
+        conn = get_db()
+        try:
+            if action == "create":
+                if not name:
+                    flash("Имя не может быть пустым")
+                else:
+                    try:
+                        conn.execute(
+                            "INSERT INTO profiles(name, created_at) VALUES(?, ?)",
+                            (name, db.now()),
+                        )
+                        conn.commit()
+                        flash(f"Профиль «{name}» создан — теперь можно переключиться")
+                    except sqlite3.IntegrityError:
+                        flash("Профиль с таким именем уже есть")
+            elif action == "select" and pid_in:
+                row = conn.execute(
+                    "SELECT name FROM profiles WHERE id = ?", (int(pid_in),)
+                ).fetchone()
+                if row:
+                    session["profile_id"] = int(pid_in)
+                    flash(f"Теперь читает: {row['name']}")
+            elif action == "rename" and pid_in and name:
+                try:
+                    conn.execute(
+                        "UPDATE profiles SET name = ? WHERE id = ?",
+                        (name, int(pid_in)),
+                    )
+                    conn.commit()
+                    flash("Профиль переименован")
+                except sqlite3.IntegrityError:
+                    flash("Профиль с таким именем уже есть")
+            elif action == "delete" and pid_in:
+                pid = int(pid_in)
+                count = conn.execute("SELECT COUNT(*) c FROM profiles").fetchone()["c"]
+                if count <= 1:
+                    flash("Нельзя удалить последний профиль")
+                else:
+                    affected_ch = [
+                        r["target_id"]
+                        for r in conn.execute(
+                            "SELECT target_id FROM ratings WHERE profile_id = ? AND target = 'chapter'",
+                            (pid,),
+                        ).fetchall()
+                    ]
+                    affected_n = [
+                        r["target_id"]
+                        for r in conn.execute(
+                            "SELECT target_id FROM ratings WHERE profile_id = ? AND target = 'note'",
+                            (pid,),
+                        ).fetchall()
+                    ]
+                    conn.execute("DELETE FROM state WHERE profile_id = ?", (pid,))
+                    conn.execute("DELETE FROM ratings WHERE profile_id = ?", (pid,))
+                    conn.execute("DELETE FROM notes WHERE profile_id = ?", (pid,))
+                    conn.execute("DELETE FROM profiles WHERE id = ?", (pid,))
+                    # пересчёт агрегатов после удаления оценок
+                    for tid in affected_ch:
+                        conn.execute(
+                            """UPDATE chapters SET rating =
+                                COALESCE((SELECT SUM(value) FROM ratings
+                                          WHERE target = 'chapter' AND target_id = ?), 0)
+                                WHERE id = ?""",
+                            (tid, tid),
+                        )
+                    for tid in affected_n:
+                        conn.execute(
+                            """UPDATE notes SET rating =
+                                COALESCE((SELECT SUM(value) FROM ratings
+                                          WHERE target = 'note' AND target_id = ?), 0)
+                                WHERE id = ?""",
+                            (tid, tid),
+                        )
+                    conn.commit()
+                    if session.get("profile_id") == pid:
+                        session["profile_id"] = db.default_profile_id()
+                    flash("Профиль удалён: прогресс, заметки и оценки очищены")
+            elif action == "reset" and pid_in:
+                conn.execute(
+                    "DELETE FROM state WHERE profile_id = ?", (int(pid_in),)
+                )
+                conn.commit()
+                flash("Прогресс чтения сброшен")
+        finally:
+            conn.close()
+        return redirect(url_for("profiles_page"))
+
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT p.id, p.name,
+                      (SELECT COUNT(*) FROM state s WHERE s.profile_id = p.id
+                           AND s.done > 0) chapters_done,
+                      (SELECT COUNT(*) FROM notes n WHERE n.profile_id = p.id) notes_count
+               FROM profiles p ORDER BY p.id"""
+        ).fetchall()
+    finally:
+        conn.close()
+    return render_template("profiles.html", rows=rows)
+
+
+# ---------------------------------------------------------------- D4: передача библиотеки
+
+@app.get("/api/library.zip")
+def library_export():
+    raw = request.args.get("ids", "")
+    ids = [int(x) for x in re.split(r"[,\s]+", raw) if x.isdigit()][:100]
+    if not ids:
+        flash("Отметьте книги для экспорта")
+        return redirect(url_for("feed", t="library"))
+    import io
+    import zipfile
+
+    conn = get_db()
+    try:
+        books = conn.execute(
+            f"SELECT * FROM books WHERE id IN ({','.join('?' * len(ids))}) ORDER BY id",
+            ids,
+        ).fetchall()
+        chapters_by_book = {}
+        for b in books:
+            chapters_by_book[b["id"]] = conn.execute(
+                "SELECT ord, title, html, words FROM chapters WHERE book_id = ? ORDER BY ord",
+                (b["id"],),
+            ).fetchall()
+    finally:
+        conn.close()
+
+    manifest = {"format": "pikabureader-library", "version": 1, "books": []}
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for b in books:
+            entry = {
+                "title": b["title"], "author": b["author"], "tags": b["tags"],
+                "description": b["description"], "cover": "",
+                "chapters": [dict(c) for c in chapters_by_book[b["id"]]],
+            }
+            if b["cover"]:
+                cover_path = os.path.join(COVER_DIR, b["cover"])
+                if os.path.exists(cover_path):
+                    entry["cover"] = b["cover"]
+                    zf.write(cover_path, f"covers/{b['cover']}")
+            img_dir = os.path.join(IMG_DIR, f"book_{b['id']}")
+            if os.path.isdir(img_dir):
+                for f in sorted(os.listdir(img_dir)):
+                    p = os.path.join(img_dir, f)
+                    if os.path.isfile(p):
+                        zf.write(p, f"images/{b['id']}/{f}")
+            manifest["books"].append(entry)
+        zf.writestr("manifest.json", json.dumps(manifest, ensure_ascii=False))
+    buf.seek(0)
+    _log_import("export", f"{len(books)} книг ({', '.join(b['title'] for b in books)})")
+    return send_file(
+        buf, mimetype="application/zip", as_attachment=True,
+        download_name="pikabu-library.zip",
+    )
+
+
+@app.post("/api/library/import")
+def library_import():
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Файл не выбран")
+        return redirect(url_for("add"))
+    import zipfile
+
+    try:
+        zf = zipfile.ZipFile(file)
+        manifest = json.loads(zf.read("manifest.json").decode("utf-8"))
+        if manifest.get("format") != "pikabureader-library":
+            raise ValueError("не тот формат архива")
+    except Exception as exc:  # noqa: BLE001
+        flash(f"Не удалось прочитать архив: {exc}")
+        return redirect(url_for("add"))
+
+    imported, skipped = 0, 0
+    try:
+        conn = get_db()
+        try:
+            for b in manifest.get("books", [])[:100]:
+                title = (b.get("title") or "").strip()
+                if not title:
+                    continue
+                dup = conn.execute(
+                    "SELECT id FROM books WHERE lower(title) = lower(?) AND lower(author) = lower(?)",
+                    (title, (b.get("author") or "").strip()),
+                ).fetchone()
+                if dup:
+                    skipped += 1
+                    continue
+                cur = conn.execute(
+                    """INSERT INTO books(title, author, tags, description, created_at)
+                       VALUES(?,?,?,?,?)""",
+                    (title, (b.get("author") or "").strip(),
+                     (b.get("tags") or "").strip()[:200],
+                     (b.get("description") or "")[:2000], db.now()),
+                )
+                book_id = cur.lastrowid
+
+                # обложка
+                cover = (b.get("cover") or "").strip()
+                if cover:
+                    try:
+                        data = zf.read(f"covers/{cover}")
+                    except KeyError:
+                        data = b""
+                    if data:
+                        ext = os.path.splitext(cover)[1] or ".jpg"
+                        cover_name = f"book_{book_id}{ext}"
+                        os.makedirs(COVER_DIR, exist_ok=True)
+                        with open(os.path.join(COVER_DIR, cover_name), "wb") as f:
+                            f.write(data)
+                        conn.execute(
+                            "UPDATE books SET cover = ? WHERE id = ?",
+                            (cover_name, book_id),
+                        )
+
+                # картинки глав: ремап путей под новый book_id
+                names = [
+                    n for n in zf.namelist()
+                    if n.startswith(f"images/{b.get('id', -1)}/")
+                ]
+                if names:
+                    folder = os.path.join(IMG_DIR, f"book_{book_id}")
+                    os.makedirs(folder, exist_ok=True)
+                    for n in names:
+                        with open(os.path.join(folder, os.path.basename(n)), "wb") as f:
+                            f.write(zf.read(n))
+
+                for ch in b.get("chapters", [])[:1000]:
+                    html = re.sub(
+                        r"/media/images/\d+/", f"/media/images/{book_id}/",
+                        ch.get("html") or "",
+                    )
+                    text = re.sub(r"<[^>]+>", "", html)
+                    ctitle = (ch.get("title") or "Глава")[:300]
+                    cur = conn.execute(
+                        """INSERT INTO chapters(book_id, ord, title, html, words, created_at)
+                           VALUES(?,?,?,?,?,?)""",
+                        (book_id, int(ch.get("ord") or 1), ctitle, html,
+                         len(text.split()), db.now()),
+                    )
+                    try:
+                        conn.execute(
+                            "INSERT INTO chapters_fts(rowid, title, content) VALUES (?,?,?)",
+                            (cur.lastrowid, ctitle, db.strip_html(html)),
+                        )
+                    except sqlite3.OperationalError:
+                        pass
+                imported += 1
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:  # noqa: BLE001
+        flash(f"Ошибка импорта: {exc}")
+        return redirect(url_for("add"))
+    finally:
+        zf.close()
+
+    n_ch = sum(len(b.get("chapters", [])) for b in manifest.get("books", []))
+    _log_import(
+        "library-import",
+        f"импортировано {imported}, пропущено дублей {skipped}, глав {n_ch}",
+    )
+    if imported:
+        flash(f"Импортировано книг: {imported} (пропущено дублей: {skipped})")
+    else:
+        flash("Новых книг не найдено (все уже в библиотеке)")
+    return redirect(url_for("feed", t="library"))
+
+
+# ---------------------------------------------------------------- D10: панель владельца
+
+@app.route("/admin", methods=["GET", "POST"])
+def admin():
+    if request.method == "POST":
+        action = request.form.get("action", "")
+        if action == "set_password":
+            _set_password((request.form.get("password") or "").strip())
+            session["owner"] = 1
+            pw = (request.form.get("password") or "").strip()
+            flash("Пароль обновлён" if pw else "Пароль снят — инстанс открыт")
+        elif action == "reindex":
+            count = db.reindex_fts()
+            flash(f"FTS переиндексирован: {count} глав")
+        return redirect(url_for("admin"))
+
+    log_lines: list[str] = []
+    if os.path.exists(IMPORT_LOG):
+        try:
+            with open(IMPORT_LOG, encoding="utf-8") as f:
+                log_lines = f.readlines()[-50:][::-1]
+        except OSError:
+            pass
+    password_set = bool(db.get_settings().get("password_hash", ""))
+    return render_template(
+        "admin.html", log_lines=log_lines, password_set=password_set,
+        data_size=_fmt_size(_data_size()), schema_version=db.schema_version(),
+    )
 
 
 # ---------------------------------------------------------------- init

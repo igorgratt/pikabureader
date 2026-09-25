@@ -8,20 +8,29 @@
 </div>
 
 {% if books %}
-<div class="library-grid">
-  {% for b in books %}
-  <a class="library-card" href="{{ url_for('book_page', book_id=b.id) }}">
-    {% if b.cover %}
-      <img class="library-cover" src="/covers/{{ b.cover }}" alt="">
-    {% else %}
-      <div class="library-cover library-cover-fb">{{ b.title[:1] }}</div>
-    {% endif %}
-    <div class="library-title">{{ b.title }}</div>
-    <div class="library-author">{{ b.author }}</div>
-  </a>
-  {% endfor %}
-  <a class="library-card library-add" href="{{ url_for('add') }}">+<span>Добавить книгу</span></a>
-</div>
+<form method="get" action="{{ url_for('library_export') }}">
+  <div class="library-toolbar">
+    <span class="feed-sub">Отметьте книги и нажмите «Экспорт» — получите zip для друга</span>
+    <button class="btn" type="submit">⬇ Экспорт выбранных (zip)</button>
+  </div>
+  <div class="library-grid">
+    {% for b in books %}
+    <div class="library-card lib-selectable">
+      <input class="lib-check" type="checkbox" name="ids" value="{{ b.id }}" id="lib-{{ b.id }}" title="Отметить для экспорта">
+      <a class="lib-link" href="{{ url_for('book_page', book_id=b.id) }}">
+        {% if b.cover %}
+          <img class="library-cover" src="/covers/{{ b.cover }}" alt="">
+        {% else %}
+          <div class="library-cover library-cover-fb">{{ b.title[:1] }}</div>
+        {% endif %}
+        <div class="library-title">{{ b.title }}</div>
+        <div class="library-author">{{ b.author }}</div>
+      </a>
+    </div>
+    {% endfor %}
+    <a class="library-card library-add" href="{{ url_for('add') }}">+<span>Добавить книгу</span></a>
+  </div>
+</form>
 {% else %}
   <div class="empty-state">
     <p>Библиотека пуста. Загрузите EPUB или FB2.</p>

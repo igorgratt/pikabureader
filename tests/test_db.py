@@ -97,3 +97,48 @@ def test_notes_v3_columns(isolated_db):
         conn.close()
     assert "quote" in cols and "edited_at" in cols
     assert row["quote"] == "цит" and row["edited_at"] == ""
+
+
+def test_v4_profiles_and_ratings_migration(isolated_db):
+    """Миграция 4: профили, state по профилям, перенос оценок в ratings."""
+    # база «из прошлого»: без профилей, оценка в колонке chapters.rating
+    conn = sqlite3.connect(isolated_db / "app.db")
+    conn.executescript(db.SCHEMA)
+    conn.execute(
+        "INSERT INTO books(title, author, created_at) VALUES('t','a','x')"
+    )
+    cur = conn.execute(
+        "INSERT INTO chapters(book_id, ord, title, html, rating, created_at) "
+        "VALUES(1, 1, 'h', '<p>x</p>', 3, 'x')"
+    )
+    conn.execute(
+        "INSERT INTO state(chapter_id, read_pct, bookmark) VALUES(?, 60, 1)",
+        (cur.lastrowid,),
+    )
+    conn.execute(
+        "INSERT INTO notes(chapter_id, text, created_at) VALUES(?, 'n', 'x')",
+        (cur.lastrowid,),
+    )
+    conn.commit()
+    conn.close()
+    assert db.schema_version() == 0
+
+    db.init_db()
+    assert db.schema_version() == db.SCHEMA_VERSION
+    conn = db.connect()
+    try:
+        prof = conn.execute("SELECT name FROM profiles WHERE id = 1").fetchone()
+        state_cols = [r["name"] for r in conn.execute("PRAGMA table_info(state)")]
+        note_cols = [r["name"] for r in conn.execute("PRAGMA table_info(notes)")]
+        rating = conn.execute(
+            "SELECT value FROM ratings WHERE target='chapter' AND target_id=1 AND profile_id=1"
+        ).fetchone()
+        st = conn.execute("SELECT profile_id, read_pct FROM state WHERE chapter_id=1").fetchone()
+        np = conn.execute("SELECT profile_id FROM notes WHERE chapter_id=1").fetchone()
+    finally:
+        conn.close()
+    assert prof["name"] == "Я"
+    assert "profile_id" in state_cols and "profile_id" in note_cols
+    assert rating["value"] == 3
+    assert st["profile_id"] == 1 and st["read_pct"] == 60
+    assert np["profile_id"] == 1

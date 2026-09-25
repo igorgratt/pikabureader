@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Кто читает? — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="feed-head">
+  <h1>Кто читает?</h1>
+  <div class="feed-sub">У каждого — свой прогресс, заметки и оценки</div>
+</div>
+
+<div class="profiles-list">
+  {% for p in rows %}
+  <div class="profile-card {{ 'is-current' if p.id == current_profile }}">
+    <div class="profile-main">
+      <span class="profile-avatar">{{ p.name[:1] }}</span>
+      <div class="profile-info">
+        <b>{{ p.name }}</b>
+        <i>{{ p.chapters_done }} глав прочитано · {{ p.notes_count }} заметок</i>
+      </div>
+    </div>
+    <div class="profile-actions">
+      {% if p.id == current_profile %}
+        <span class="profile-badge">читает сейчас</span>
+      {% else %}
+        <form method="post" class="profile-form">
+          <input type="hidden" name="action" value="select">
+          <input type="hidden" name="id" value="{{ p.id }}">
+          <button class="btn btn-accent" type="submit">Читать</button>
+        </form>
+      {% endif %}
+      <form method="post" class="profile-form">
+        <input type="hidden" name="action" value="rename">
+        <input type="hidden" name="id" value="{{ p.id }}">
+        <input class="profile-name-input" type="text" name="name" value="{{ p.name }}" maxlength="40" required>
+        <button class="btn" type="submit">Переименовать</button>
+      </form>
+      <form method="post" class="profile-form" onsubmit="return confirm('Сбросить прогресс чтения этого профиля?')">
+        <input type="hidden" name="action" value="reset">
+        <input type="hidden" name="id" value="{{ p.id }}">
+        <button class="btn" type="submit">Сбросить прогресс</button>
+      </form>
+      <form method="post" class="profile-form" onsubmit="return confirm('Удалить профиль со всеми заметками и оценками?')">
+        <input type="hidden" name="action" value="delete">
+        <input type="hidden" name="id" value="{{ p.id }}">
+        <button class="btn btn-danger" type="submit">Удалить</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<section class="settings-card">
+  <h2 class="settings-title">Новый профиль</h2>
+  <form method="post" class="profile-form">
+    <input type="hidden" name="action" value="create">
+    <input class="profile-name-input" type="text" name="name" placeholder="Имя читателя" maxlength="40" required>
+    <button class="btn btn-accent" type="submit">Создать</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#ffd600">
+  <title>Вход — PikaBuReader</title>
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/pikabu.css') }}">
+</head>
+<body class="login-page">
+  <div class="login-card">
+    <div class="login-logo"><span class="logo-mark">P</span>ikaBuReader</div>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+      {% endif %}
+    {% endwith %}
+    <form method="post" action="{{ url_for('login', next=next) }}">
+      <label class="login-label" for="password">Пароль инстанса</label>
+      <input class="login-input" type="password" id="password" name="password"
+             autocomplete="current-password" autofocus required>
+      <button class="btn btn-accent login-btn" type="submit">Войти</button>
+    </form>
+    <p class="login-hint">Общий пароль доступа к этой читалке.</p>
+  </div>
+</body>
+</html>

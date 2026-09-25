@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Панель владельца — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="feed-head">
+  <h1>Панель владельца</h1>
+  <div class="feed-sub">Сервер · PikaBuReader v{{ app_version }} · схема БД v{{ schema_version }}</div>
+</div>
+
+<section class="settings-card">
+  <h2 class="settings-title">Пароль инстанса</h2>
+  <p class="settings-desc">
+    {% if password_set %}
+      Пароль задан: все страницы и API требуют входа.
+    {% else %}
+      Пароль не задан: инстанс открыт для всех, кто знает адрес.
+    {% endif %}
+    Пустое поле — снять пароль.
+  </p>
+  <form method="post" class="admin-form">
+    <input type="hidden" name="action" value="set_password">
+    <input class="login-input" type="password" name="password" placeholder="Новый пароль" autocomplete="new-password">
+    <button class="btn btn-accent" type="submit">Сохранить пароль</button>
+  </form>
+</section>
+
+<section class="settings-card">
+  <h2 class="settings-title">Читатели</h2>
+  <p class="settings-desc">Профили: создание, переименование, сброс прогресса, удаление.</p>
+  <a class="btn" href="{{ url_for('profiles_page') }}">Управление профилями →</a>
+</section>
+
+<section class="settings-card">
+  <h2 class="settings-title">Бэкап и восстановление</h2>
+  <div class="settings-stats">
+    <span class="settings-stat"><b>{{ data_size }}</b> на диске</span>
+  </div>
+  <p class="settings-desc">Экспорт всей папки <code>data/</code> в zip; восстановление полностью заменяет данные.</p>
+  <a class="btn btn-accent" href="{{ url_for('backup_download') }}">⬇ Скачать бэкап (zip)</a>
+  <form class="restore-form" action="{{ url_for('backup_restore') }}" method="post" enctype="multipart/form-data">
+    <label class="restore-label">
+      Восстановить из бэкапа
+      <input type="file" name="file" accept=".zip" required>
+    </label>
+    <button class="btn" type="submit">Восстановить</button>
+  </form>
+</section>
+
+<section class="settings-card">
+  <h2 class="settings-title">Индексация и лог</h2>
+  <form method="post" class="admin-form">
+    <input type="hidden" name="action" value="reindex">
+    <button class="btn" type="submit">Переиндексировать поиск (FTS)</button>
+  </form>
+  <h3 class="admin-subtitle">Лог импорта (последние 50)</h3>
+  <div class="import-log">
+    {% for line in log_lines %}<div class="import-log-line">{{ line.rstrip() }}</div>
+    {% else %}<div class="import-log-line">Пока пусто — журнал появится после первого импорта.</div>{% endfor %}
+  </div>
+</section>
+{% endblock %}

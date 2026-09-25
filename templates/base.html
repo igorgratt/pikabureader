@@ -29,7 +29,7 @@
       </form>
       <a class="btn btn-accent" href="{{ url_for('add') }}">+ Добавить книгу</a>
       <button class="icon-btn" id="theme-toggle" title="Сменить тему" type="button">◐</button>
-      <div class="avatar-me">Я</div>
+      <a class="avatar-me" href="{{ url_for('profiles_page') }}" title="Кто читает: {{ profile_name }}">{{ profile_name[:1] }}</a>
     </div>
   </header>
 
@@ -41,6 +41,7 @@
         <a href="{{ url_for('bookmarks') }}">🔖 Закладки <span class="side-count">{{ nav_counts.bookmarks }}</span></a>
         <a href="{{ url_for('feed', t='reading') }}">⏳ Сейчас читаю <span class="side-count">{{ nav_counts.reading }}</span></a>
         <a href="{{ url_for('settings_page') }}">⚙ Настройки</a>
+        <a href="{{ url_for('admin') }}">🛡 Панель владельца</a>
       </nav>
       <div class="side-card">
         <div class="side-card-title">Темы книг</div>
