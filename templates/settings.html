@@ -26,6 +26,24 @@
 </section>
 
 <section class="settings-card">
+  <h2 class="settings-title">Свой шрифт</h2>
+  <p class="settings-desc">
+    Загрузите шрифт TTF или OTF (до 2 МБ) — он появится в списке шрифтов
+    читалки как «Свой шрифт» и подключится только на страницах.
+    {% if settings.get('custom_font') %}Сейчас: <b>{{ settings['custom_font'] }}</b>.{% endif %}
+  </p>
+  <form class="font-form" method="post" action="{{ url_for('font_upload') }}" enctype="multipart/form-data">
+    <input type="file" name="font" accept=".ttf,.otf" required>
+    <button class="btn btn-accent" type="submit">Загрузить шрифт</button>
+  </form>
+  {% if settings.get('custom_font') %}
+  <form method="post" action="{{ url_for('font_delete') }}" onsubmit="return confirm('Удалить свой шрифт?')">
+    <button class="btn" type="submit">Удалить свой шрифт</button>
+  </form>
+  {% endif %}
+</section>
+
+<section class="settings-card">
   <h2 class="settings-title">Бэкап и восстановление</h2>
   <p class="settings-desc">
     Бэкап — это zip со всей папкой <code>data/</code>: база, обложки, картинки.

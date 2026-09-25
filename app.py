@@ -19,7 +19,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.12.0"
+__version__ = "0.13.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -1410,6 +1410,80 @@ def settings_page():
         "settings.html", stats=stats, data_size=_fmt_size(_data_size()),
         schema_version=db.schema_version(),
     )
+
+
+# ---------------------------------------------------------------- R8: свои шрифты
+
+def _font_dir() -> str:
+    return os.path.join(db.DATA_DIR, "fonts")
+
+
+FONT_MAGIC = {
+    ".ttf": (b"\x00\x01\x00\x00", b"true"),
+    ".otf": (b"OTTO",),
+}
+FONT_MAX = 2 * 1024 * 1024  # лимит 2 МБ
+
+
+@app.get("/fonts/<name>")
+def fonts_file(name: str):
+    if not re.fullmatch(r"custom\.(ttf|otf)", name):
+        abort(404)
+    path = os.path.join(_font_dir(), name)
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read()  # в память: файл сразу закрывается (Windows-блокировки)
+    except OSError:
+        abort(404)
+    return send_file(
+        io.BytesIO(data),
+        mimetype="font/ttf" if name.endswith(".ttf") else "font/otf",
+        download_name=name,
+    )
+
+
+@app.post("/settings/font")
+def font_upload():
+    f = request.files.get("font")
+    if not f or not f.filename:
+        flash("Файл не выбран")
+        return redirect(url_for("settings_page"))
+    ext = next((e for e in FONT_MAGIC if f.filename.lower().endswith(e)), "")
+    if not ext:
+        flash("Нужен шрифт в формате TTF или OTF")
+        return redirect(url_for("settings_page"))
+    data = f.read(FONT_MAX + 1)
+    if len(data) > FONT_MAX:
+        flash("Файл слишком большой (лимит 2 МБ)")
+        return redirect(url_for("settings_page"))
+    if data[:4] not in FONT_MAGIC[ext]:
+        flash("Файл не похож на шрифт TTF/OTF")
+        return redirect(url_for("settings_page"))
+    os.makedirs(_font_dir(), exist_ok=True)
+    keep = f"custom{ext}"
+    for old in ("custom.ttf", "custom.otf"):
+        if old != keep:
+            try:
+                os.remove(os.path.join(_font_dir(), old))
+            except OSError:
+                pass
+    with open(os.path.join(_font_dir(), keep), "wb") as fh:
+        fh.write(data)
+    db.save_setting("custom_font", keep)
+    flash("Шрифт сохранён — выберите «Свой шрифт» в списке шрифтов читалки")
+    return redirect(url_for("settings_page"))
+
+
+@app.post("/settings/font/delete")
+def font_delete():
+    for name in ("custom.ttf", "custom.otf"):
+        try:
+            os.remove(os.path.join(_font_dir(), name))
+        except OSError:
+            pass
+    db.save_setting("custom_font", "")
+    flash("Свой шрифт удалён")
+    return redirect(url_for("settings_page"))
 
 
 def _backup_zip_bytes() -> bytes:

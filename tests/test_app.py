@@ -1044,3 +1044,78 @@ def test_notes_all_root_only_with_reply_count(client):
     assert "дочерний ответ" not in page  # ответ виден на странице главы
     assert "💬 1" in page  # счётчик ответов у корня
     assert page.count('<article class="note-row">') == 1
+
+
+# ---------------------------------------------------------------- R8/R9: шрифты и автопрокрутка
+
+def test_font_upload_validation_and_serve(client):
+    """Загрузка TTF: валидация расширения/сигнатуры, отдача файла, удаление."""
+    # не TTF/OTF — отказ
+    r = client.post(
+        "/settings/font",
+        data={"font": (io.BytesIO(b"\x00\x01\x00\x00"), "evil.exe")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "TTF или OTF" in r.get_data(as_text=True)
+    # расширение .txt — отказ
+    r = client.post(
+        "/settings/font",
+        data={"font": (io.BytesIO(b"\x00\x01\x00\x00"), "font.txt")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "TTF или OTF" in r.get_data(as_text=True)
+    # не настоящий шрифт — отказ
+    r = client.post(
+        "/settings/font",
+        data={"font": (io.BytesIO(b"<html>not a font"), "fake.ttf")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert "не похож на шрифт" in r.get_data(as_text=True)
+    assert not db.get_settings().get("custom_font")
+
+    # валидный TTF (мок-сигнатура) — сохраняется
+    r = client.post(
+        "/settings/font",
+        data={"font": (io.BytesIO(b"\x00\x01\x00\x00" + b"\x00" * 64), "MyFont.ttf")},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 302
+    assert db.get_settings().get("custom_font") == "custom.ttf"
+    got = client.get("/fonts/custom.ttf")
+    assert got.status_code == 200
+    assert got.data[:4] == b"\x00\x01\x00\x00"
+
+    # подозрительные имена не отдаются
+    assert client.get("/fonts/evil.txt").status_code == 404
+    assert client.get("/fonts/../../app.db").status_code == 404
+
+    # удаление — файла и настройки больше нет
+    client.post("/settings/font/delete")
+    assert not db.get_settings().get("custom_font")
+    assert client.get("/fonts/custom.ttf").status_code == 404
+
+
+def test_font_and_autoscroll_in_reader(client):
+    """Свой шрифт появляется в настройках и читалке; есть автопрокрутка."""
+    cid = seed()
+    # шрифта нет — опции «Свой шрифт» нет, @font-face не подключён
+    page = client.get(f"/story/{cid}").get_data(as_text=True)
+    assert ">Свой шрифт</option>" not in page
+    assert "PikaCustom" not in page
+    assert 'id="auto-scroll"' in page
+
+    # загружаем шрифт
+    client.post(
+        "/settings/font",
+        data={"font": (io.BytesIO(b"OTTO" + b"\x00" * 64), "MyFont.otf")},
+        content_type="multipart/form-data",
+    )
+    page = client.get(f"/story/{cid}").get_data(as_text=True)
+    assert ">Свой шрифт</option>" in page
+    assert "@font-face" in page and "PikaCustom" in page
+    assert "/fonts/custom.otf" in page
+    settings_page = client.get("/settings").get_data(as_text=True)
+    assert "custom.otf" in settings_page and "Удалить свой шрифт" in settings_page

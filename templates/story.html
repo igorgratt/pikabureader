@@ -38,6 +38,7 @@
     <select class="tool-select" data-set="font" title="Шрифт">
       <option value="sans">Без засечек</option>
       <option value="serif">С засечками</option>
+      {% if settings.get('custom_font') %}<option value="custom">Свой шрифт</option>{% endif %}
     </select>
     <select class="tool-select" data-set="size" title="Размер">
       <option value="16">16 px</option>
@@ -49,6 +50,12 @@
       <option value="narrow">Узкая</option>
       <option value="normal">Средняя</option>
       <option value="wide">Широкая</option>
+    </select>
+    <select class="tool-select" id="auto-scroll" title="Автопрокрутка (для чтения лёжа)">
+      <option value="0">Авто: выкл</option>
+      <option value="20">Авто: медленно</option>
+      <option value="40">Авто: средняя</option>
+      <option value="70">Авто: быстрая</option>
     </select>
     <button class="tool-select" id="toc-toggle" title="Оглавление книги" type="button">☰ Оглавление</button>
     <button class="tool-select tool-fs" id="fs-toggle" title="На весь экран" type="button">⛶</button>

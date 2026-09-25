@@ -14,6 +14,16 @@
   </script>
   {% endif %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/pikabu.css') }}">
+  {% if settings.get('custom_font') %}
+  <style>
+    @font-face {
+      font-family: "PikaCustom";
+      src: url("{{ url_for('fonts_file', name=settings['custom_font']) }}")
+        format("{{ 'opentype' if settings['custom_font'].endswith('.otf') else 'truetype' }}");
+      font-display: swap;
+    }
+  </style>
+  {% endif %}
 </head>
 <body>
   <header class="topbar">

@@ -20,7 +20,9 @@
       "--font-read",
       settings.font === "serif"
         ? 'Georgia, "Times New Roman", serif'
-        : 'system-ui, "Segoe UI", Roboto, Arial, sans-serif'
+        : settings.font === "custom"
+          ? '"PikaCustom", Georgia, "Times New Roman", serif'
+          : 'system-ui, "Segoe UI", Roboto, Arial, sans-serif'
     );
     document.querySelectorAll("[data-set]").forEach((el) => {
       el.value = settings[el.dataset.set] || el.value;
@@ -632,4 +634,62 @@
         });
     });
   });
+
+  // ------------------------------------------------ R9: автопрокрутка
+  const asSel = document.getElementById("auto-scroll");
+  if (asSel) {
+    let asSpeed = 0; // px/sec
+    let asLast = 0;
+    let asRaf = 0;
+
+    const asStop = () => {
+      asSpeed = 0;
+      asLast = 0;
+      if (asRaf) cancelAnimationFrame(asRaf);
+      asRaf = 0;
+      asSel.value = "0";
+    };
+
+    const asTick = (ts) => {
+      if (!asSpeed) {
+        asRaf = 0;
+        return;
+      }
+      if (asLast) window.scrollBy(0, (asSpeed * (ts - asLast)) / 1000);
+      asLast = ts;
+      const atBottom =
+        window.innerHeight + window.scrollY >=
+        document.documentElement.scrollHeight - 4;
+      if (atBottom) {
+        asStop();
+        return;
+      }
+      asRaf = requestAnimationFrame(asTick);
+    };
+
+    asSel.addEventListener("change", () => {
+      asSpeed = parseInt(asSel.value, 10) || 0;
+      asLast = 0;
+      if (asSpeed) {
+        if (asRaf) cancelAnimationFrame(asRaf);
+        asRaf = requestAnimationFrame(asTick);
+      } else {
+        asStop();
+      }
+    });
+
+    // любое действие пользователя (колесо, свайп, клавиши) — остановка
+    ["wheel", "touchmove", "keydown"].forEach((ev) =>
+      window.addEventListener(
+        ev,
+        () => {
+          if (asSpeed) asStop();
+        },
+        { passive: true }
+      )
+    );
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && asSpeed) asStop();
+    });
+  }
 })();

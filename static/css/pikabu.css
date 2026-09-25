@@ -737,6 +737,16 @@ kbd {
 }
 .library-progress { color: var(--text-2); font-size: 12px; margin-top: 3px; }
 
+/* ---------------- R8/R9: свой шрифт и автопрокрутка ---------------- */
+.font-form {
+  display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+  margin: 6px 0 4px;
+}
+.font-form input[type="file"] {
+  font-size: 13.5px; color: var(--text-2); max-width: 100%;
+}
+.settings-card form + form { margin-top: 8px; }
+
 /* ---------------- N8: все заметки ---------------- */
 .notes-filter {
   display: flex; gap: 12px; align-items: center;
