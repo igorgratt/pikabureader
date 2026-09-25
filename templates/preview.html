@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Предпросмотр импорта — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="add-box">
+  <h1>Предпросмотр импорта</h1>
+  <p class="add-sub">
+    <code>{{ filename }}</code> — «{{ parsed.title }}»{% if parsed.author %} · {{ parsed.author }}{% endif %}.
+    Выберите, как разбить книгу на главы, и нажмите «Импортировать».
+  </p>
+
+  <section class="settings-card">
+    <h2 class="settings-title">Разбивка</h2>
+    <div class="mode-list">
+      {% for key, label in modes.items() %}
+      <a class="mode-card {{ 'is-active' if key == mode }}"
+         href="{{ url_for('add_preview', m=key) }}">
+        <b>{{ label }}</b>
+        {% if key == 'parts' %}<i>Как задумал автор: по главам и секциям</i>{% endif %}
+        {% if key == 'compact' %}<i>Длинные главы режутся на куски ~2000 знаков — удобно для ленты</i>{% endif %}
+        {% if key == 'merge' %}<i>Короткие секции склеиваются в главы ~8000 знаков — меньше мелочи</i>{% endif %}
+      </a>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="settings-card">
+    <h2 class="settings-title">Будет {{ chapters | length }} глав · {{ '{:,}'.format(total_chars).replace(',', ' ') }} знаков</h2>
+    <ol class="preview-list">
+      {% for title, html in chapters[:300] %}
+      <li class="preview-item">
+        <span class="preview-title">{{ title or 'Без названия' }}</span>
+        <span class="preview-chars">{{ html | striptags | length }} зн.</span>
+      </li>
+      {% endfor %}
+      {% if chapters | length > 300 %}
+      <li class="preview-item preview-more">… и ещё {{ chapters | length - 300 }}</li>
+      {% endif %}
+    </ol>
+    <div class="preview-actions">
+      <form method="post" action="{{ url_for('add_commit') }}" class="preview-form">
+        <input type="hidden" name="mode" value="{{ mode }}">
+        <button class="btn btn-accent btn-big" type="submit">Импортировать {{ chapters | length }} глав</button>
+      </form>
+      <a class="btn" href="{{ url_for('add', cancel=1) }}">Отмена</a>
+    </div>
+  </section>
+</div>
+{% endblock %}

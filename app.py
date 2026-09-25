@@ -5,6 +5,7 @@ import os
 import re
 import sqlite3
 import uuid
+import zipfile
 from functools import wraps
 from html import escape as _escape
 
@@ -14,7 +15,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.4.1"
+__version__ = "0.5.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -269,7 +270,7 @@ def _search_chapters(conn, q: str, limit: int = 8):
              "snip": _hl_snippet(h["snip"])} for h in hits]
 
 
-def _render_feed(conn, order: str, page: int, q: str = "", per_page: int = 10):
+def _render_feed(conn, order: str, page: int, q: str = "", per_page: int = 10, tag: str = ""):
     offset = (page - 1) * per_page
     pid = _profile_id()
     where = ""
@@ -277,6 +278,10 @@ def _render_feed(conn, order: str, page: int, q: str = "", per_page: int = 10):
     if q:
         where = "WHERE (c.title LIKE ? OR b.title LIKE ? OR b.author LIKE ?)"
         params += [f"%{q}%", f"%{q}%", f"%{q}%"]
+    # N4: фильтр ленты по тегу книги (теги через запятую, точное совпадение элемента)
+    if tag:
+        where += (" AND" if where else "WHERE") + " (',' || replace(b.tags, ', ', ',') || ',') LIKE ?"
+        params.append(f"%,{tag},%")
     if order == "hot":
         order_by = "c.rating DESC, c.id DESC"
     elif order == "reading":
@@ -285,7 +290,7 @@ def _render_feed(conn, order: str, page: int, q: str = "", per_page: int = 10):
     else:
         order_by = "c.id DESC"
     sql = f"""
-        SELECT c.*, b.title book_title, b.author, b.cover, b.id bid,
+        SELECT c.*, b.title book_title, b.author, b.cover, b.id bid, b.tags book_tags,
                s.read_pct, s.bookmark, s.done,
                (SELECT COUNT(*) FROM notes n WHERE n.chapter_id = c.id
                     AND n.profile_id = ?) note_count
@@ -305,24 +310,53 @@ def feed():
     tab = request.args.get("t", "new")
     page = max(1, int(request.args.get("p", 1)))
     q = request.args.get("q", "").strip()
+    tag = request.args.get("tag", "").strip()
     conn = get_db()
     try:
         chapter_hits = _search_chapters(conn, q) if q else []
         if tab == "library":
-            books = conn.execute(
-                "SELECT * FROM books WHERE title LIKE ? OR author LIKE ? ORDER BY id DESC",
-                (f"%{q}%", f"%{q}%"),
-            ).fetchall()
-            return render_template("library.html", books=books, q=q)
+            sort = request.args.get("sort", "new")
+            books = _library_books(conn, q, tag, sort)
+            return render_template("library.html", books=books, q=q, sort=sort)
         order = tab if tab in ("hot", "reading") else "new"
-        rows, total = _render_feed(conn, order, page, q)
+        rows, total = _render_feed(conn, order, page, q, tag=tag)
     finally:
         conn.close()
     pages = max(1, (total + 9) // 10)
     return render_template(
-        "feed.html", rows=rows, tab=tab, page=page, pages=pages, q=q,
+        "feed.html", rows=rows, tab=tab, page=page, pages=pages, q=q, tag=tag,
         total=total, chapter_hits=chapter_hits,
     )
+
+
+def _library_books(conn, q: str = "", tag: str = "", sort: str = "new"):
+    """N5: книги библиотеки с поиском, тегом и сортировкой."""
+    where, params = [], []
+    if q:
+        where.append("(b.title LIKE ? OR b.author LIKE ?)")
+        params += [f"%{q}%", f"%{q}%"]
+    if tag:
+        where.append("(',' || replace(b.tags, ', ', ',') || ',') LIKE ?")
+        params.append(f"%,{tag},%")
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+    order = {
+        "title": "b.title COLLATE NOCASE",
+        "author": "b.author COLLATE NOCASE, b.title COLLATE NOCASE",
+        "progress": "done DESC, b.title COLLATE NOCASE",
+    }.get(sort, "b.id DESC")
+    # прогресс по текущему профилю — для сортировки (N5)
+    sql = f"""
+        SELECT b.*,
+               COALESCE(SUM(CASE WHEN s.done = 1 THEN 1 ELSE 0 END), 0) AS done,
+               COUNT(c.id) AS total
+        FROM books b
+        LEFT JOIN chapters c ON c.book_id = b.id
+        LEFT JOIN state s ON s.chapter_id = c.id AND s.profile_id = ?
+        {where_sql}
+        GROUP BY b.id
+        ORDER BY {order}
+    """
+    return conn.execute(sql, (_profile_id(), *params)).fetchall()
 
 
 @app.route("/bookmarks")
@@ -331,7 +365,7 @@ def bookmarks():
     try:
         rows = conn.execute(
             """SELECT c.*, b.title book_title, b.author, b.cover, b.id bid,
-                      s.read_pct, s.bookmark, s.done
+                      s.read_pct, s.bookmark, s.done, s.bookmark_quote
                FROM state s JOIN chapters c ON c.id = s.chapter_id
                JOIN books b ON b.id = c.book_id
                WHERE s.bookmark = 1 AND s.profile_id = ?
@@ -341,6 +375,67 @@ def bookmarks():
     finally:
         conn.close()
     return render_template("list.html", rows=rows, heading="Закладки")
+
+
+@app.route("/notes/export")
+def notes_export():
+    """M5: заметки текущего профиля одним файлом Markdown."""
+    book_id = request.args.get("book_id", type=int)
+    conn = get_db()
+    try:
+        sql = """SELECT n.*, c.title ch_title, c.ord, b.title book_title, b.id bid
+                 FROM notes n JOIN chapters c ON c.id = n.chapter_id
+                 JOIN books b ON b.id = c.book_id
+                 WHERE n.profile_id = ?"""
+        params: list = [_profile_id()]
+        if book_id:
+            sql += " AND b.id = ?"
+            params.append(book_id)
+        sql += " ORDER BY b.title COLLATE NOCASE, c.ord, n.id"
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+
+    # дерево: parent → children, корни — в порядке выборки
+    by_id = {r["id"]: dict(r) for r in rows}
+    children: dict = {}
+    for r in rows:
+        parent = r["parent_id"] if r["parent_id"] in by_id else None
+        children.setdefault(parent, []).append(r["id"])
+
+    lines = ["# Заметки — PikaBuReader", ""]
+    seen = {"book": None, "chapter": None}
+    for nid in children.get(None, []):
+        _write_note_md(lines, by_id, children, nid, 0, seen)
+    if len(lines) == 2:
+        lines.append("_Заметок пока нет._")
+    md = "\n".join(lines) + "\n"
+    fname = "notes.md" if not book_id else f"notes-book-{book_id}.md"
+    return Response(
+        md, mimetype="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
+def _write_note_md(lines: list, by_id: dict, children: dict, nid: int, depth: int, seen: dict):
+    n = by_id[nid]
+    if n["book_title"] != seen["book"]:
+        lines.append(f"## {n['book_title']}")
+        seen["book"] = n["book_title"]
+        seen["chapter"] = None
+    if (n["bid"], n["ord"]) != seen["chapter"]:
+        lines.append(f"### Глава {n['ord']}. {n['ch_title']}")
+        seen["chapter"] = (n["bid"], n["ord"])
+    indent = "  " * depth
+    if n["quote"]:
+        lines.append(f"{indent}> {n['quote']}")
+    meta = n["edited_at"] or n["created_at"]
+    if n["edited_at"]:
+        meta += " (изменено)"
+    lines.append(f"{indent}- {n['text']} _({meta})_")
+    lines.append("")
+    for cid in children.get(nid, []):
+        _write_note_md(lines, by_id, children, cid, depth + 1, seen)
 
 
 # ---------------------------------------------------------------- book
@@ -469,27 +564,45 @@ def story(chapter_id: int):
 
 # ---------------------------------------------------------------- add
 
-@app.route("/add", methods=["GET", "POST"])
-def add():
-    if request.method == "GET":
-        return render_template("add.html")
-    file = request.files.get("file")
-    if not file or not file.filename:
-        flash("Файл не выбран")
-        return redirect(url_for("add"))
+# F9: режимы разбивки при импорте
+SPLIT_MODES = {
+    "parts": "Как в книге (по главам)",
+    "compact": "Компактные (~2000 знаков)",
+    "merge": "Крупные (склейка мелких секций)",
+}
+
+
+def _save_upload(file) -> str:
     filename = re.sub(r"[^\w.\-]+", "_", file.filename)
     os.makedirs(UPLOAD_DIR, exist_ok=True)
     path = os.path.join(UPLOAD_DIR, f"{uuid.uuid4().hex[:8]}_{filename}")
     file.save(path)
-    try:
-        parsed = parse_book(path)
-    except Exception as exc:  # noqa: BLE001
-        flash(f"Не удалось разобрать книгу: {exc}")
-        return redirect(url_for("add"))
-    if not parsed.chapters:
-        flash("В книге не найдено ни одной главы")
-        return redirect(url_for("add"))
+    return path
 
+
+def _import_error(exc: Exception, filename: str) -> dict:
+    """F5: понятная категория ошибки импорта вместо сыпавшегося traceback."""
+    msg = str(exc).strip() or exc.__class__.__name__
+    low = msg.lower()
+    if "неизвестный формат" in low:
+        kind, hint = "Формат не поддерживается", "Нужен EPUB, FB2 (или fb2.zip) либо PDF"
+    elif isinstance(exc, zipfile.BadZipFile) or "zip" in low:
+        kind, hint = "Файл повреждён", "Не открывается как архив — проверьте файл на источнике"
+    elif "not a zip" in low or isinstance(exc, UnicodeDecodeError):
+        kind, hint = "Файл не читается", "Возможно, это не тот формат или файл битый"
+    else:
+        kind, hint = "Ошибка разбора", "Файл не похож на книгу: возможно, DRM или пустое содержимое"
+    return {"file": filename, "status": "error", "kind": kind, "msg": msg, "hint": hint}
+
+
+def _store_book(parsed, chapters) -> dict:
+    """Сохранить разобранную книгу; возвращает карточку результата (F5)."""
+    if not chapters:
+        return {
+            "file": "", "status": "error", "kind": "Глав нет",
+            "msg": "В книге не найдено ни одной главы",
+            "hint": "Возможно, книга защищена DRM или содержит только обложку",
+        }
     conn = get_db()
     try:
         # F4: дедупликация — та же книга уже в библиотеке
@@ -498,9 +611,10 @@ def add():
             (parsed.title, parsed.author),
         ).fetchone()
         if dup:
-            os.remove(path)
-            flash(f"Книга «{parsed.title}» уже есть в библиотеке — добавление пропущено")
-            return redirect(url_for("book_page", book_id=dup["id"]))
+            return {
+                "file": "", "status": "dup", "kind": "Уже в библиотеке",
+                "msg": f"Книга «{parsed.title}» уже есть", "book_id": dup["id"],
+            }
 
         cur = conn.execute(
             """INSERT INTO books(title, author, cover, tags, description, created_at)
@@ -531,7 +645,7 @@ def add():
             with open(os.path.join(COVER_DIR, cover_name), "wb") as f:
                 f.write(parsed.cover)
 
-        for ord_, (title, html) in enumerate(parsed.chapters, 1):
+        for ord_, (title, html) in enumerate(chapters, 1):
             html = html.replace("asset:", f"/media/images/{book_id}/")
             for short, target in mapping.items():
                 html = html.replace(f"/media/images/{book_id}/{short}", f"/media/images/{book_id}/{target}")
@@ -552,10 +666,204 @@ def add():
         if cover_name:
             conn.execute("UPDATE books SET cover = ? WHERE id = ?", (cover_name, book_id))
         conn.commit()
-        flash(f"Книга «{parsed.title}» добавлена: {len(parsed.chapters)} глав")
-        return redirect(url_for("book_page", book_id=book_id))
+        return {
+            "file": "", "status": "ok", "kind": "Добавлена",
+            "msg": f"«{parsed.title}»: {len(chapters)} глав", "book_id": book_id,
+        }
     finally:
         conn.close()
+
+
+def _import_one(file) -> dict:
+    """Импорт одного файла: сохраняет, парсит, сохраняет в БД (F3/F5)."""
+    filename = re.sub(r"[^\w.\-]+", "_", file.filename) or "file"
+    path = _save_upload(file)
+    try:
+        parsed = parse_book(path)
+    except Exception as exc:  # noqa: BLE001
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return _import_error(exc, filename)
+    result = _store_book(parsed, parsed.chapters)
+    result["file"] = filename
+    if result["status"] != "ok":
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return result
+
+
+# ---- F9: режимы разбивки ------------------------------------------------
+
+def _split_html_blocks(html: str, limit: int = 2000) -> list[str]:
+    """Разрезать html на куски ~limit знаков: сначала по блочным тегам,
+    сверхдлинние простые блоки — по словам внутри них."""
+    blocks = re.findall(
+        r"<(?:p|h[1-6]|blockquote|ul|ol|div|pre)[^>]*>.*?</(?:p|h[1-6]|blockquote|ul|ol|div|pre)>",
+        html, flags=re.S | re.I,
+    )
+    if not blocks:
+        blocks = [html]
+
+    expanded: list[str] = []
+    for b in blocks:
+        plain = re.sub(r"<[^>]+>", "", b)
+        if len(plain) <= limit:
+            expanded.append(b)
+            continue
+        # один тег-обёртка без вложенных тегов — режем текст по словам
+        m = re.fullmatch(r"<(\w+)([^>]*)>(.*)</\1>", b, flags=re.S)
+        if not m or "<" in m.group(3):
+            expanded.append(b)
+            continue
+        tag, attrs, inner = m.group(1), m.group(2), m.group(3)
+        chunks: list[str] = []
+        cur: list[str] = []
+        cur_len = 0
+        for word in inner.split(" "):
+            if cur and cur_len + len(word) + 1 > limit:
+                chunks.append(" ".join(cur))
+                cur, cur_len = [word], len(word)
+            else:
+                cur.append(word)
+                cur_len += len(word) + 1
+        if cur:
+            chunks.append(" ".join(cur))
+        expanded += [f"<{tag}{attrs}>{c}</{tag}>" for c in chunks]
+
+    out: list[str] = []
+    cur, cur_len = "", 0
+    for b in expanded:
+        plain_len = len(re.sub(r"<[^>]+>", "", b))
+        if cur and cur_len + plain_len > limit:
+            out.append(cur)
+            cur, cur_len = b, plain_len
+        else:
+            cur += b
+            cur_len += plain_len
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _merge_chapters(chapters: list, limit: int = 8000) -> list:
+    """Склеить соседние мелкие секции в главы ~limit знаков."""
+    out, cur_title, cur_body = [], None, ""
+    for title, html in chapters:
+        plain = len(re.sub(r"<[^>]+>", "", html))
+        if cur_title is None:
+            cur_title, cur_body = title, html
+            continue
+        cur_len = len(re.sub(r"<[^>]+>", "", cur_body))
+        if cur_len < limit and plain < limit:
+            cur_body += "<hr>" + html
+        else:
+            out.append((cur_title, cur_body))
+            cur_title, cur_body = title, html
+    if cur_title is not None:
+        out.append((cur_title, cur_body))
+    return out
+
+
+def _apply_split_mode(chapters: list, mode: str) -> list:
+    if mode == "compact":
+        out = []
+        for title, html in chapters:
+            parts = _split_html_blocks(html)
+            if len(parts) == 1:
+                out.append((title, html))
+            else:
+                for i, part in enumerate(parts, 1):
+                    out.append((f"{title} ({i}/{len(parts)})", part))
+        return out
+    if mode == "merge":
+        return _merge_chapters(chapters)
+    return chapters
+
+
+@app.route("/add", methods=["GET", "POST"])
+def add():
+    if request.method == "GET":
+        if request.args.get("cancel"):
+            pending = session.pop("import_pending", None)
+            if pending:
+                try:
+                    os.remove(pending["path"])
+                except OSError:
+                    pass
+        results = session.pop("import_results", None)
+        return render_template("add.html", results=results)
+    files = [f for f in request.files.getlist("file") if f and f.filename]
+    if not files:
+        flash("Файл не выбран")
+        return redirect(url_for("add"))
+    # F9: одна книга + явное «Предпросмотр» → выбор режима разбивки
+    if request.form.get("preview") == "1" and len(files) == 1:
+        path = _save_upload(files[0])
+        session["import_pending"] = {"path": path, "filename": files[0].filename}
+        return redirect(url_for("add_preview"))
+    # F3: мультизагрузка — карточки результатов по каждому файлу (F5)
+    results = []
+    for f in files[:50]:
+        res = _import_one(f)
+        _log_import("import", f"{res['file']}: {res['status']} — {res['msg']}")
+        results.append(res)
+    session["import_results"] = results
+    return redirect(url_for("add"))
+
+
+@app.route("/add/preview")
+def add_preview():
+    """F9: предпросмотр разбивки до импорта — список будущих глав."""
+    pending = session.get("import_pending")
+    if not pending or not os.path.exists(pending["path"]):
+        flash("Файл для предпросмотра не найден — загрузите заново")
+        return redirect(url_for("add"))
+    mode = request.args.get("m", "parts")
+    if mode not in SPLIT_MODES:
+        mode = "parts"
+    try:
+        parsed = parse_book(pending["path"])
+    except Exception as exc:  # noqa: BLE001
+        session.pop("import_pending", None)
+        err = _import_error(exc, pending["filename"])
+        session["import_results"] = [err]
+        return redirect(url_for("add"))
+    chapters = _apply_split_mode(parsed.chapters, mode)
+    total_chars = sum(len(re.sub(r"<[^>]+>", "", h)) for _, h in chapters)
+    return render_template(
+        "preview.html", parsed=parsed, chapters=chapters, mode=mode,
+        modes=SPLIT_MODES, filename=pending["filename"], total_chars=total_chars,
+    )
+
+
+@app.route("/add/import", methods=["POST"])
+def add_commit():
+    """F9: подтверждение импорта с выбранным режимом разбивки."""
+    pending = session.pop("import_pending", None)
+    if not pending or not os.path.exists(pending.get("path", "")):
+        flash("Файл для импорта не найден — загрузите заново")
+        return redirect(url_for("add"))
+    mode = request.form.get("mode", "parts")
+    if mode not in SPLIT_MODES:
+        mode = "parts"
+    try:
+        parsed = parse_book(pending["path"])
+    except Exception as exc:  # noqa: BLE001
+        result = _import_error(exc, pending["filename"])
+    else:
+        result = _store_book(parsed, _apply_split_mode(parsed.chapters, mode))
+    result["file"] = pending["filename"]
+    _log_import("import", f"{result['file']}: {result['status']} ({mode}) — {result['msg']}")
+    try:
+        os.remove(pending["path"])
+    except OSError:
+        pass
+    session["import_results"] = [result]
+    return redirect(url_for("add"))
 
 
 # ---------------------------------------------------------------- api
@@ -649,20 +957,27 @@ def api_bookmark():
     pid = _profile_id()
     conn = get_db()
     try:
-        conn.execute(
-            """INSERT INTO state(chapter_id, profile_id, bookmark, last_read_at)
-               VALUES(?,?,1,?) ON CONFLICT(chapter_id, profile_id)
-               DO UPDATE SET bookmark = 1 - state.bookmark, last_read_at = excluded.last_read_at""",
-            (cid, pid, db.now()),
-        )
-        conn.commit()
         row = conn.execute(
             "SELECT bookmark FROM state WHERE chapter_id = ? AND profile_id = ?",
             (cid, pid),
         ).fetchone()
+        new_val = 1 - (row["bookmark"] if row else 0)
+        # N6: цитата — абзац, на который ведёт закладка (только при включении)
+        quote = ""
+        if new_val:
+            quote = str(payload.get("quote") or "").strip()[:300]
+        conn.execute(
+            """INSERT INTO state(chapter_id, profile_id, bookmark, bookmark_quote, last_read_at)
+               VALUES(?,?,?,?,?) ON CONFLICT(chapter_id, profile_id)
+               DO UPDATE SET bookmark = excluded.bookmark,
+                             bookmark_quote = excluded.bookmark_quote,
+                             last_read_at = excluded.last_read_at""",
+            (cid, pid, new_val, quote, db.now()),
+        )
+        conn.commit()
     finally:
         conn.close()
-    return {"ok": True, "bookmark": bool(row and row["bookmark"])}
+    return {"ok": True, "bookmark": bool(new_val)}
 
 
 @app.post("/api/note")

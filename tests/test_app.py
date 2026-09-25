@@ -333,3 +333,296 @@ def test_import_log_written(client):
     with open(app_module.IMPORT_LOG, encoding="utf-8") as f:
         content = f.read()
     assert "export" in content and "Тест" in content
+
+
+# ---------------------------------------------------------------- helpers (волна 6)
+
+NS_FB21 = "http://www.gribuser.ru/xml/fb2.1"
+
+
+def fb2_bytes(title: str, sections) -> bytes:
+    """Минимальный валидный FB2: sections = [(заголовок, текст)] или [текст]."""
+    body = ""
+    for s in sections:
+        if isinstance(s, tuple):
+            body += f"<section><title><p>{s[0]}</p></title><p>{s[1]}</p></section>"
+        else:
+            body += f"<section><p>{s}</p></section>"
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>'
+        f'<FictionBook xmlns="{NS_FB21}">'
+        "<description><title-info>"
+        f"<book-title>{title}</book-title>"
+        "<author><first-name>Иван</first-name><last-name>Петров</last-name></author>"
+        "<genre>prose</genre>"
+        "</title-info></description>"
+        f"<body>{body}</body></FictionBook>"
+    ).encode("utf-8")
+
+
+def main_content(page: str) -> str:
+    """Только центральная колонка — без книг сайдбаров (для проверок ленты)."""
+    if '<main class="content">' not in page:
+        return page
+    return page.split('<main class="content">', 1)[1].split("</main>", 1)[0]
+
+
+def add_book_direct(title, tags="", author="Автор"):
+    """Книга с одной главой напрямую в БД; возвращает id главы."""
+    conn = db.connect()
+    try:
+        cur = conn.execute(
+            "INSERT INTO books(title, author, tags, created_at) VALUES(?, ?, ?, '2026-01-01')",
+            (title, author, tags),
+        )
+        cur = conn.execute(
+            "INSERT INTO chapters(book_id, ord, title, html, words, created_at) "
+            "VALUES(?, 1, 'Глава', '<p>текст</p>', 2, '2026-01-01')",
+            (cur.lastrowid,),
+        )
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------- F3/F5: импорт
+
+def test_add_multiple_files_at_once(client):
+    """F3: несколько файлов в одной загрузке — каждый в свою карточку."""
+    data = {
+        "file": [
+            (io.BytesIO(fb2_bytes("Книга А", ["Первый раздел"])), "a.fb2"),
+            (io.BytesIO(fb2_bytes("Книга Б", ["Второй раздел"])), "b.fb2"),
+        ],
+    }
+    r = client.post("/add", data=data, content_type="multipart/form-data",
+                    follow_redirects=True)
+    page = r.get_data(as_text=True)
+    assert "Результаты импорта" in page
+    assert "Книга А" in page and "Книга Б" in page
+    assert page.count("import-badge-ok") == 2
+    conn = db.connect()
+    try:
+        n = conn.execute("SELECT COUNT(*) c FROM books").fetchone()["c"]
+    finally:
+        conn.close()
+    assert n == 2
+
+
+def test_add_error_shows_card(client):
+    """F5: ошибка импорта — понятная карточка, а не мелкий flash."""
+    r = client.post(
+        "/add",
+        data={"file": (io.BytesIO(b"plain text"), "note.txt")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    page = r.get_data(as_text=True)
+    assert "Результаты импорта" in page
+    assert "Формат не поддерживается" in page
+    assert "EPUB, FB2" in page  # подсказка
+
+
+def test_add_duplicate_reports_card(client):
+    """F4/F5: дубликат — карточка со ссылкой на существующую книгу."""
+    add_book_direct("Книга А", author="Иван Петров")
+    r = client.post(
+        "/add",
+        data={"file": (io.BytesIO(fb2_bytes("Книга А", ["Раздел"])), "a.fb2")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    page = r.get_data(as_text=True)
+    assert "Уже в библиотеке" in page
+    assert "Открыть существующую" in page
+
+
+# ---------------------------------------------------------------- F9: предпросмотр
+
+def test_import_preview_flow(client):
+    """F9: предпросмотр → смена режима → импорт."""
+    fb = fb2_bytes("Большая книга", [("Раздел", "Слово " * 700)])
+    r = client.post(
+        "/add?preview=1",
+        data={"file": (io.BytesIO(fb), "big.fb2"), "preview": "1"},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 302 and "/add/preview" in r.headers["Location"]
+    page = client.get("/add/preview?m=parts").get_data(as_text=True)
+    assert "Большая книга" in page and "Будет" in page
+    page_compact = client.get("/add/preview?m=compact").get_data(as_text=True)
+    assert "Компактные" in page_compact
+    # импорт выбранным режимом
+    r = client.post("/add/import", data={"mode": "compact"}, follow_redirects=True)
+    page = r.get_data(as_text=True)
+    assert "Добавлена" in page
+    conn = db.connect()
+    try:
+        n = conn.execute("SELECT COUNT(*) c FROM chapters").fetchone()["c"]
+    finally:
+        conn.close()
+    assert n >= 2  # compact разрезал длинную главу
+
+
+def test_split_mode_helpers():
+    """F9: юнит-проверка режимов разбивки."""
+    import app as app_module
+
+    long_html = "<p>" + ("Абзац текста. " * 200) + "</p>"
+    parts = app_module._apply_split_mode([("Раздел", long_html)], "compact")
+    assert len(parts) > 1
+    assert all("Раздел" in t for t, _ in parts)
+    # исходный режим не трогает ничего
+    assert app_module._apply_split_mode([("Раздел", long_html)], "parts") == [("Раздел", long_html)]
+    # merge склеивает мелкие секции
+    small = [("Секция " + str(i), "<p>короткий текст</p>") for i in range(8)]
+    merged = app_module._apply_split_mode(small, "merge")
+    assert len(merged) < len(small)
+    assert sum(h.count("<hr>") for _, h in merged) == len(small) - len(merged)
+
+
+def test_preview_without_file_redirects(client):
+    r = client.get("/add/preview")
+    assert r.status_code == 302
+
+
+# ---------------------------------------------------------------- N4: теги
+
+def test_feed_tag_filter(client):
+    add_book_direct("Фентези-книга", tags="фентези, приключения")
+    add_book_direct("Детектив-книга", tags="детектив")
+    content = main_content(client.get("/?tag=фентези").get_data(as_text=True))
+    assert "Фентези-книга" in content
+    assert "Детектив-книга" not in content
+    # теги в ленте — ссылки на фильтр
+    content = main_content(client.get("/").get_data(as_text=True))
+    assert "tag=" in content and "фентези" in content
+
+
+def test_feed_tag_filter_empty(client):
+    add_book_direct("Детектив-книга", tags="детектив")
+    content = main_content(client.get("/?tag=фентези").get_data(as_text=True))
+    assert "Детектив-книга" not in content
+    assert "Здесь пока пусто" in content
+
+
+# ---------------------------------------------------------------- N5: библиотека
+
+def test_library_sorting(client):
+    add_book_direct("Альфа")   # id меньше → в new последняя
+    add_book_direct("Бета")    # id больше → в new первая
+    content = main_content(client.get("/?t=library&sort=title").get_data(as_text=True))
+    assert content.index("Альфа") < content.index("Бета")
+    content = main_content(client.get("/?t=library&sort=new").get_data(as_text=True))
+    assert content.index("Бета") < content.index("Альфа")
+    content = main_content(client.get("/?t=library&sort=author").get_data(as_text=True))
+    assert "Сначала новые" in content  # активная вкладка есть
+
+
+def test_library_sort_by_progress(client):
+    aid = add_book_direct("Альфа")
+    add_book_direct("Бета")
+    # «Альфа» полностью прочитана
+    conn = db.connect()
+    try:
+        conn.execute(
+            "INSERT INTO state(chapter_id, profile_id, done, read_pct) VALUES(?, 1, 1, 100)",
+            (aid,),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    content = main_content(client.get("/?t=library&sort=progress").get_data(as_text=True))
+    assert content.index("Альфа") < content.index("Бета")
+
+
+# ---------------------------------------------------------------- N6: закладка с цитатой
+
+def test_bookmark_saves_quote(client):
+    cid = seed()
+    r = client.post("/api/bookmark", json={"chapter_id": cid, "quote": "Текст главы для чтения"})
+    assert r.get_json()["bookmark"] is True
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            "SELECT bookmark_quote FROM state WHERE chapter_id = ?", (cid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["bookmark_quote"] == "Текст главы для чтения"
+    # цитата видна на странице закладок
+    page = client.get("/bookmarks").get_data(as_text=True)
+    assert "bookmark-quote" in page and "Текст главы для чтения" in page
+    # выключение — цитата очищается
+    client.post("/api/bookmark", json={"chapter_id": cid})
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            "SELECT bookmark, bookmark_quote FROM state WHERE chapter_id = ?", (cid,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["bookmark"] == 0 and row["bookmark_quote"] == ""
+
+
+# ---------------------------------------------------------------- M5: экспорт заметок
+
+def test_notes_export_markdown(client):
+    cid = seed()
+    client.post("/api/note", json={"chapter_id": cid, "text": "важная мысль", "quote": "цитата-основание"})
+    r = client.get("/notes/export")
+    assert r.mimetype.startswith("text/markdown")
+    body = r.get_data(as_text=True)
+    assert "важная мысль" in body
+    assert "цитата-основание" in body
+    assert "## " in body and "### Глава 1" in body
+    assert "attachment" in r.headers.get("Content-Disposition", "")
+
+
+def test_notes_export_empty(client):
+    r = client.get("/notes/export")
+    assert r.status_code == 200
+    assert "Заметок пока нет" in r.get_data(as_text=True)
+
+
+# ---------------------------------------------------------------- Q5: контраст
+
+def _css_theme_blocks():
+    import pathlib
+    import re as _re
+
+    css = pathlib.Path("static/css/pikabu.css").read_text(encoding="utf-8")
+
+    def block(pattern):
+        m = _re.search(pattern + r"\s*\{(.*?)\}", css, _re.S)
+        assert m, pattern
+        return dict(_re.findall(r"(--[\w-]+):\s*(#[0-9a-fA-F]{6})", m.group(1)))
+
+    root = block(r":root")
+    dark = {**root, **block(r'\[data-theme="dark"\]')}
+    return root, dark
+
+
+def _rel_luminance(hex_color: str) -> float:
+    vals = [int(hex_color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+    lin = [v / 12.92 if v <= 0.04045 else ((v + 0.055) / 1.055) ** 2.4 for v in vals]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def _contrast(a: str, b: str) -> float:
+    la, lb = _rel_luminance(a), _rel_luminance(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def test_theme_contrast_wcag_aa():
+    """Q5: основные пары цветов обеих тем — не ниже 4.5:1 (WCAG AA)."""
+    root, dark = _css_theme_blocks()
+    for name, theme in (("light", root), ("dark", dark)):
+        for fg in ("--text", "--text-2", "--link", "--green", "--red"):
+            for bg in ("--bg", "--card"):
+                ratio = _contrast(theme[fg], theme[bg])
+                assert ratio >= 4.5, f"{name}: {fg} на {bg} = {ratio:.2f}"
+        # тёмный текст на жёлтом акценте (кнопки/активные вкладки)
+        assert _contrast("#1a1a1a", theme["--accent"]) >= 4.5

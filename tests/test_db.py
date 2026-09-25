@@ -142,3 +142,36 @@ def test_v4_profiles_and_ratings_migration(isolated_db):
     assert rating["value"] == 3
     assert st["profile_id"] == 1 and st["read_pct"] == 60
     assert np["profile_id"] == 1
+
+
+def test_v5_bookmark_quote_column(isolated_db):
+    """Миграция 5: state.bookmark_quote — цитата закладки (N6)."""
+    conn = sqlite3.connect(isolated_db / "app.db")
+    conn.executescript(db.SCHEMA)
+    conn.execute("INSERT INTO books(title, author, created_at) VALUES('t','a','x')")
+    conn.execute(
+        "INSERT INTO chapters(book_id, ord, title, html, created_at) VALUES(1,1,'h','<p>x</p>','x')"
+    )
+    conn.execute(
+        "INSERT INTO state(chapter_id, read_pct, bookmark) VALUES(1, 50, 1)"
+    )
+    conn.commit()
+    conn.close()
+
+    db.init_db()
+    conn = db.connect()
+    try:
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(state)")]
+        row = conn.execute("SELECT bookmark_quote FROM state WHERE chapter_id = 1").fetchone()
+        conn.execute(
+            "UPDATE state SET bookmark_quote = 'нужный абзац' WHERE chapter_id = 1"
+        )
+        conn.commit()
+        saved = conn.execute(
+            "SELECT bookmark_quote FROM state WHERE chapter_id = 1"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert "bookmark_quote" in cols
+    assert row["bookmark_quote"] == ""  # старая закладка получила пустую цитату
+    assert saved["bookmark_quote"] == "нужный абзац"

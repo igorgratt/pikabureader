@@ -7,6 +7,16 @@
   <div class="feed-sub">{{ books | length }} книг</div>
 </div>
 
+<div class="subtabs">
+  {% for key, label in [('new','Сначала новые'),('title','По названию'),('author','По автору'),('progress','По прогрессу')] %}
+    {% if key == sort %}
+      <span class="subtab is-active">{{ label }}</span>
+    {% else %}
+      <a class="subtab" href="{{ url_for('feed', t='library', sort=key, q=q) }}">{{ label }}</a>
+    {% endif %}
+  {% endfor %}
+</div>
+
 {% if books %}
 <form method="get" action="{{ url_for('library_export') }}">
   <div class="library-toolbar">
@@ -25,6 +35,7 @@
         {% endif %}
         <div class="library-title">{{ b.title }}</div>
         <div class="library-author">{{ b.author }}</div>
+        {% if b.total %}<div class="library-progress">{{ b.done }}/{{ b.total }} прочитано</div>{% endif %}
       </a>
     </div>
     {% endfor %}

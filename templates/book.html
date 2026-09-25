@@ -22,6 +22,7 @@
         <a class="foot-btn foot-btn-go" href="{{ url_for('story', chapter_id=resume_id) }}">▶ {{ resume_label }}</a>
       {% endif %}
       <button class="foot-btn book-delete" data-book="{{ book.id }}" type="button">🗑 Удалить книгу</button>
+      <a class="foot-btn" href="{{ url_for('notes_export', book_id=book.id) }}" title="M5: заметки этой книги одним файлом Markdown">⬇ Заметки (.md)</a>
     </div>
   </div>
 </section>

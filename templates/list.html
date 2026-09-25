@@ -21,6 +21,9 @@
     <span class="story-meta">Глава {{ r.ord }} · {{ r.author }}</span>
   </header>
   <h2 class="story-title"><a href="{{ url_for('story', chapter_id=r.id) }}">{{ r.title }}</a></h2>
+  {% if r.bookmark_quote is defined and r.bookmark_quote %}
+    <blockquote class="bookmark-quote">{{ r.bookmark_quote }}</blockquote>
+  {% endif %}
   <div class="story-body"><p>{{ r.html | preview }}</p>
     <a class="read-more" href="{{ url_for('story', chapter_id=r.id) }}">Читать далее</a>
   </div>

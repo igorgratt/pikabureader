@@ -1,13 +1,13 @@
 :root {
   --accent: #ffd600;
   --accent-hover: #ffdf33;
-  --link: #3478c6;
-  --green: #3a9b4c;
-  --red: #e04f4f;
+  --link: #2e6bb0;
+  --green: #2c7a3d;
+  --red: #c62828;
   --bg: #eceef1;
   --card: #ffffff;
   --text: #1f1f1f;
-  --text-2: #8a8a8a;
+  --text-2: #666666;
   --border: #e2e4e8;
   --side: #ffffff;
   --flash: #e8f5e9;
@@ -20,10 +20,12 @@
   --bg: #15161a;
   --card: #1e2025;
   --text: #e6e6e6;
-  --text-2: #8f8f8f;
+  --text-2: #a0a0a0;
   --border: #2a2c33;
   --side: #1e2025;
   --link: #6ea8e0;
+  --green: #5cc471;
+  --red: #ff6b6b;
   --flash: #243326;
   --shadow: 0 1px 3px rgba(0,0,0,.4);
 }
@@ -673,6 +675,65 @@ kbd {
 .lib-link:hover { text-decoration: none; }
 .import-share { margin-top: 18px; }
 .import-share form { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; }
+
+/* ---------------- Q5: контраст тёмной темы ---------------- */
+/* светло-зелёный --green в тёмной теме: белый текст на нём не читается */
+[data-theme="dark"] .badge-done,
+[data-theme="dark"] .chapter-row.is-done .chapter-num { color: #0f2413; }
+
+/* ---------------- Волна 6: импорт (F3/F5/F9) ---------------- */
+.dropzone-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+.import-results { margin-bottom: 18px; }
+.import-card {
+  background: var(--bg); border: 1px solid var(--border);
+  border-left-width: 4px; border-radius: 8px;
+  padding: 12px 14px; margin-bottom: 10px;
+}
+.import-card.import-ok { border-left-color: var(--green); }
+.import-card.import-dup { border-left-color: var(--accent); }
+.import-card.import-error { border-left-color: var(--red); }
+.import-card-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.import-badge {
+  font-size: 12px; font-weight: 700; padding: 3px 9px;
+  border-radius: 10px; background: var(--card); border: 1px solid var(--border);
+}
+.import-badge-ok { color: var(--green); }
+.import-badge-error { color: var(--red); }
+.import-file { font-size: 12px; color: var(--text-2); }
+.import-msg { margin-top: 7px; font-size: 14px; }
+.import-hint { color: var(--text-2); font-size: 13px; margin-top: 3px; }
+.import-card .btn-sm { margin-top: 9px; display: inline-block; font-size: 13px; padding: 5px 12px; }
+
+.mode-list { display: flex; gap: 10px; flex-wrap: wrap; }
+.mode-card {
+  flex: 1 1 180px; background: var(--bg); border: 2px solid var(--border);
+  border-radius: 10px; padding: 12px 14px; color: var(--text);
+  text-decoration: none !important;
+}
+.mode-card b { display: block; font-size: 14px; margin-bottom: 4px; }
+.mode-card i { font-style: normal; font-size: 12.5px; color: var(--text-2); line-height: 1.35; display: block; }
+.mode-card.is-active { border-color: var(--accent); background: var(--card); }
+.mode-card:hover { border-color: var(--accent-hover); }
+
+.preview-list { margin: 0; padding: 0 0 0 22px; max-height: 420px; overflow-y: auto; }
+.preview-item {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 6px 4px; border-bottom: 1px dashed var(--border); font-size: 14px;
+}
+.preview-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview-chars { color: var(--text-2); font-size: 12.5px; white-space: nowrap; }
+.preview-more { color: var(--text-2); border-bottom: 0; }
+.preview-actions { display: flex; gap: 12px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+.preview-form { display: inline-block; }
+
+/* ---------------- Волна 6: закладки/библиотека ---------------- */
+.bookmark-quote {
+  margin: 0 0 10px; padding: 7px 13px;
+  border-left: 3px solid var(--accent);
+  background: var(--bg); border-radius: 0 8px 8px 0;
+  color: var(--text-2); font-size: 14px; line-height: 1.4;
+}
+.library-progress { color: var(--text-2); font-size: 12px; margin-top: 3px; }
 
 /* ---------------- responsive ---------------- */
 .tabbar { display: none; }

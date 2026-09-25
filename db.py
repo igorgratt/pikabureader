@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS settings (
 # ключ = номер версии, значение = SQL-скрипт апгрейда. Порядок применяется
 # по возрастанию, каждая миграция выполняется транзакционно и поднимает
 # PRAGMA user_version. SCHEMA — только для создания новой базы с нуля.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 MIGRATIONS: dict[int, str] = {
     2: """
@@ -107,6 +107,10 @@ MIGRATIONS: dict[int, str] = {
         SELECT chapter_id, 1, bookmark, done, read_pct, last_read_at FROM state;
     DROP TABLE state;
     ALTER TABLE state_profiled RENAME TO state;
+    """,
+    # 5: цитата закладки (N6) — абзац, на который ведёт закладка
+    5: """
+    ALTER TABLE state ADD COLUMN bookmark_quote TEXT NOT NULL DEFAULT '';
     """,
 }
 

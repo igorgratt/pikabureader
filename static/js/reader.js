@@ -85,10 +85,31 @@
   });
 
   // ------------------------------------------------ bookmarks
+  // N6: цитата — ближайший к верху видимый абзац (чтобы в закладке было видно,
+  // на что она ведёт)
+  function currentQuote() {
+    const box = document.getElementById("reader");
+    if (!box) return "";
+    const els = box.querySelectorAll("p, h1, h2, h3, li, blockquote, pre");
+    let best = null;
+    let bestDist = Infinity;
+    for (const el of els) {
+      const r = el.getBoundingClientRect();
+      if (r.height < 8) continue;
+      const dist = Math.abs(r.top - 110);
+      if (r.bottom > 0 && dist < bestDist) {
+        bestDist = dist;
+        best = el;
+      }
+    }
+    if (!best) return "";
+    return best.textContent.replace(/\s+/g, " ").trim().slice(0, 300);
+  }
+
   document.addEventListener("click", (e) => {
     const btn = e.target.closest(".bookmark-btn");
     if (!btn) return;
-    post("/api/bookmark", { chapter_id: btn.dataset.chapter }).then((res) => {
+    post("/api/bookmark", { chapter_id: btn.dataset.chapter, quote: currentQuote() }).then((res) => {
       if (!res.ok) return;
       btn.classList.toggle("is-active", res.bookmark);
       btn.textContent = res.bookmark ? "🔖 в закладках" : "🔖 Сохранить";

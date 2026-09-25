@@ -4,16 +4,40 @@
 {% block content %}
 <div class="add-box">
   <h1>Добавить книгу</h1>
-  <p class="add-sub">Поддерживаются EPUB, FB2 и PDF. Книга превратится в «сообщество», а главы — в «посты» ленты.</p>
+  <p class="add-sub">Поддерживаются EPUB, FB2 и PDF — можно выбрать несколько файлов сразу. Книга превратится в «сообщество», а главы — в «посты» ленты.</p>
+
+  {% if results %}
+  <section class="settings-card import-results">
+    <h2 class="settings-title">Результаты импорта</h2>
+    {% for r in results %}
+    <div class="import-card import-{{ r.status }}">
+      <div class="import-card-head">
+        <span class="import-badge import-badge-{{ r.status }}">{{ r.kind }}</span>
+        {% if r.file %}<code class="import-file">{{ r.file }}</code>{% endif %}
+      </div>
+      <div class="import-msg">{{ r.msg }}</div>
+      {% if r.hint %}<div class="import-hint">{{ r.hint }}</div>{% endif %}
+      {% if r.status == 'ok' and r.book_id %}
+        <a class="btn btn-sm" href="{{ url_for('book_page', book_id=r.book_id) }}">Открыть книгу →</a>
+      {% elif r.status == 'dup' and r.book_id %}
+        <a class="btn btn-sm" href="{{ url_for('book_page', book_id=r.book_id) }}">Открыть существующую →</a>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </section>
+  {% endif %}
 
   <form class="dropzone" id="add-form" method="post" action="{{ url_for('add') }}" enctype="multipart/form-data">
-    <input type="file" name="file" id="file-input" accept=".epub,.fb2,.zip,.pdf" hidden required>
+    <input type="file" name="file" id="file-input" accept=".epub,.fb2,.zip,.pdf" multiple hidden required>
     <div class="dropzone-inner" id="dropzone">
       <div class="dropzone-icon">📚</div>
-      <div class="dropzone-text">Перетащите файл сюда<br>или <span class="dropzone-link">выберите файл</span></div>
-      <div class="dropzone-hint">EPUB, FB2, PDF · до 200 МБ</div>
+      <div class="dropzone-text">Перетащите файлы сюда<br>или <span class="dropzone-link">выберите файлы</span></div>
+      <div class="dropzone-hint">EPUB, FB2, PDF · несколько файлов · до 200 МБ</div>
     </div>
-    <button class="btn btn-accent btn-big" type="submit" id="submit-btn" disabled>Загрузить</button>
+    <div class="dropzone-actions">
+      <button class="btn btn-accent btn-big" type="submit" id="submit-btn" disabled>Загрузить</button>
+      <button class="btn btn-big" type="submit" name="preview" value="1" id="preview-btn" disabled title="Показать, как разобьются главы, до импорта">Предпросмотр…</button>
+    </div>
     <div class="upload-progress" id="upload-progress" hidden>
       <div class="progress-bar progress-wide"><span class="progress-fill" id="upload-fill" style="width:0%"></span></div>
       <span id="upload-label">Загрузка…</span>
@@ -41,17 +65,24 @@
   const input = document.getElementById('file-input');
   const zone = document.getElementById('dropzone');
   const btn = document.getElementById('submit-btn');
-  zone.addEventListener('click', () => input.click());
-  input.addEventListener('change', () => {
-    if (input.files.length) {
-      zone.querySelector('.dropzone-text').innerHTML = input.files[0].name;
-      btn.disabled = false;
+  const previewBtn = document.getElementById('preview-btn');
+  function refreshBtns() {
+    const n = input.files.length;
+    btn.disabled = previewBtn.disabled = !n;
+    if (n) {
+      const names = Array.from(input.files).map(f => f.name);
+      zone.querySelector('.dropzone-text').innerHTML = n === 1
+        ? names[0]
+        : n + ' файла(ов)<br><span class="dropzone-hint">' + names.slice(0, 4).join(', ') + (n > 4 ? '…' : '') + '</span>';
+      previewBtn.disabled = n !== 1;  // предпросмотр работает с одной книгой
     }
-  });
+  }
+  zone.addEventListener('click', () => input.click());
+  input.addEventListener('change', refreshBtns);
   ['dragover','dragenter'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.add('is-drag'); }));
   ['dragleave','drop'].forEach(ev => zone.addEventListener(ev, e => { e.preventDefault(); zone.classList.remove('is-drag'); }));
   zone.addEventListener('drop', e => {
-    if (e.dataTransfer.files.length) { input.files = e.dataTransfer.files; input.dispatchEvent(new Event('change')); }
+    if (e.dataTransfer.files.length) { input.files = e.dataTransfer.files; refreshBtns(); }
   });
 </script>
 {% endblock %}

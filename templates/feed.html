@@ -14,6 +14,13 @@
   </div>
 {% endif %}
 
+{% if tag %}
+  <div class="subtabs">
+    <span class="subtab is-active">Тег: {{ tag }}</span>
+    <a class="subtab" href="{{ url_for('feed', t=tab, q=q) }}">Сбросить ✕</a>
+  </div>
+{% endif %}
+
 {% if q and chapter_hits %}
 <div class="search-hits">
   <div class="feed-head"><h2>Главы по запросу «{{ q }}»</h2></div>
@@ -65,7 +72,7 @@
 
   <div class="story-tags">
     {% if r.book_title %}<a class="tag" href="{{ url_for('book_page', book_id=r.bid) }}">{{ r.book_title }}</a>{% endif %}
-    {% if r.tags %}{% for t in r.tags.split(',')[:5] %}<span class="tag">{{ t.strip() }}</span>{% endfor %}{% endif %}
+    {% if r.book_tags %}{% for t in r.book_tags.split(',')[:5] %}<a class="tag" href="{{ url_for('feed', t=tab, tag=t.strip()) }}" title="Показать главы с этим тегом">{{ t.strip() }}</a>{% endfor %}{% endif %}
   </div>
 </article>
 {% else %}
@@ -77,14 +84,14 @@
 
 {% if pages > 1 %}
 <nav class="pager">
-  {% if page > 1 %}<a class="page-link" href="{{ url_for('feed', t=tab, p=page-1, q=q) }}">← Назад</a>{% endif %}
+  {% if page > 1 %}<a class="page-link" href="{{ url_for('feed', t=tab, p=page-1, q=q, tag=tag) }}">← Назад</a>{% endif %}
   {% for p in range(1, pages + 1) %}
     {% if p == page %}<span class="page-link is-active">{{ p }}</span>
     {% elif p <= 3 or p > pages - 2 or (p - page) | abs <= 1 %}
-      <a class="page-link" href="{{ url_for('feed', t=tab, p=p, q=q) }}">{{ p }}</a>
+      <a class="page-link" href="{{ url_for('feed', t=tab, p=p, q=q, tag=tag) }}">{{ p }}</a>
     {% elif (p - page) | abs == 2 %}<span class="page-dots">…</span>{% endif %}
   {% endfor %}
-  {% if page < pages %}<a class="page-link" href="{{ url_for('feed', t=tab, p=page+1, q=q) }}">Вперёд →</a>{% endif %}
+  {% if page < pages %}<a class="page-link" href="{{ url_for('feed', t=tab, p=page+1, q=q, tag=tag) }}">Вперёд →</a>{% endif %}
 </nav>
 {% endif %}
 {% endblock %}
