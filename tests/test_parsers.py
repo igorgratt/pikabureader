@@ -434,3 +434,35 @@ def test_epub_sources_align_with_chapters(tmp_path):
     assert 'href="ch2.xhtml#to-second"' in res.chapters[0][1]
     # якорь во второй главе сохранён
     assert 'id="to-second"' in res.chapters[1][1]
+
+
+# ---------------------------------------------------------------- security: схемы URL
+
+def test_clean_strips_javascript_href():
+    out = _clean_html('<p><a href="javascript:alert(1)">клик</a></p>')
+    assert "javascript:" not in out
+    assert "клик" in out
+
+
+def test_clean_strips_data_and_obfuscated_schemes():
+    out = _clean_html('<a href="data:text/html;base64,PHN2Zz4=">x</a>')
+    assert "data:" not in out
+    out = _clean_html('<a href="java\tscript:alert(1)">y</a>')
+    assert "script:alert" not in out
+    out = _clean_html('<img src="javascript:alert(1)" alt="i">')
+    assert "javascript:" not in out
+
+
+def test_clean_keeps_safe_urls():
+    out = _clean_html(
+        '<a href="https://example.com/a?b=1">a</a>'
+        '<a href="../x.xhtml#n1">b</a>'
+        '<a href="#anchor">c</a>'
+        '<img src="/media/images/1/x.png" alt="i">'
+        '<a href="mailto:author@example.com">m</a>'
+    )
+    assert 'href="https://example.com/a?b=1"' in out
+    assert 'href="../x.xhtml#n1"' in out
+    assert 'href="#anchor"' in out
+    assert 'src="/media/images/1/x.png"' in out
+    assert 'href="mailto:author@example.com"' in out

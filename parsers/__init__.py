@@ -35,6 +35,18 @@ def _tag_of(el) -> str:
     return el.tag.split("}")[-1].lower()
 
 
+SAFE_SCHEMES = ("http:", "https:", "mailto:", "asset:", "ftp:")
+
+
+def _safe_url(url: str) -> bool:
+    """Относительные пути/якоря и безопасные схемы; javascript:/data: — нет.
+    Схема вычисляется по нормализованной строке (как это делают браузеры,
+    выкидывая управляющие символы вида java\\tscript:)."""
+    cleaned = re.sub(r"[\x00-\x20]+", "", url).lower()
+    m = re.match(r"^([a-z][a-z0-9+.\-]*):", cleaned)
+    return not m or (m.group(1) + ":") in SAFE_SCHEMES
+
+
 def _clean_fragment(raw: bytes | str) -> etree._Element:
     """Parse arbitrary HTML fragment, drop everything not in ALLOWED."""
     if isinstance(raw, bytes):
@@ -76,10 +88,16 @@ def _clean_fragment(raw: bytes | str) -> etree._Element:
                 for attr in list(el.attrib):
                     if attr.lower() not in ("src", "alt", "loading"):
                         del el.attrib[attr]
+                src = el.get("src")
+                if src is not None and not _safe_url(src):
+                    del el.attrib["src"]
             elif tag == "a":
                 for attr in list(el.attrib):
                     if attr.lower() not in ("href", "title", "id"):
                         del el.attrib[attr]
+                href = el.get("href")
+                if href is not None and not _safe_url(href):
+                    del el.attrib["href"]
             else:
                 keep = el.get("id")
                 el.attrib.clear()

@@ -1,4 +1,7 @@
 import io
+import os
+import re
+import urllib.parse
 import zipfile
 
 import pytest
@@ -824,3 +827,75 @@ def test_goto_route(client):
     assert r.headers["Location"].endswith(f"/story/{ch1}")
     # неизвестная книга → 404
     assert client.get("/goto/99999/Text/x.xhtml").status_code == 404
+
+
+# ---------------------------------------------------------------- Q8: security + регресс
+
+def test_login_next_rejects_protocol_relative(client):
+    """next=//host и /\\host — протокол-относительные в браузере: не уводим наружу."""
+    r = client.post("/admin", data={"action": "set_password", "password": "secret"})
+    assert r.status_code == 302
+    client.get("/logout")
+    for bad in ("//evil.example", "/\\evil.example", "/../evil.example"):
+        r = client.post(
+            f"/login?next={urllib.parse.quote(bad)}",
+            data={"password": "secret"},
+            follow_redirects=False,
+        )
+        assert r.status_code == 302
+        loc = r.headers["Location"]
+        assert loc.startswith("/") and not loc.startswith("//")
+        assert "evil" not in loc
+    # локальный next работает как раньше
+    r = client.post(
+        "/login?next=/settings", data={"password": "secret"},
+        follow_redirects=False,
+    )
+    assert r.headers["Location"] == "/settings"
+
+
+def test_file_routes_reject_path_traversal(client):
+    """/covers и /media не отдают файлы за пределами своих каталогов."""
+    for path in (
+        "/covers/..%2F..%2Fapp.db",
+        "/covers/....//....//app.db",
+        "/media/images/1/..%2F..%2F..%2Fapp.db",
+        "/media/images/1/../../../app.db",
+    ):
+        assert client.get(path).status_code in (400, 404), path
+
+
+def test_restore_rejects_zipslip(client):
+    """Архив с путями ../ не распаковывается и не портит данные."""
+    seed()
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("app.db", "не база".encode())
+        zf.writestr("../evil.txt", b"pwned")
+    buf.seek(0)
+    r = client.post(
+        "/api/backup/restore",
+        data={"file": (buf, "evil.zip")},
+        content_type="multipart/form-data",
+    )
+    assert r.status_code == 302
+    assert not os.path.exists(os.path.join(db.DATA_DIR, "..", "evil.txt"))
+    # библиотека не тронута
+    assert "Тест" in client.get("/").get_data(as_text=True)
+
+
+def test_smoke_all_get_routes(client):
+    """Регресс: каждый GET-роут из url_map отвечает без 5xx."""
+    import app as app_module
+
+    seed()  # книга id=1, глава id=1
+    checked = 0
+    for rule in sorted(app_module.app.url_map.iter_rules(), key=lambda r: r.rule):
+        if "GET" not in rule.methods or rule.endpoint == "static":
+            continue
+        path = re.sub(r"<int:\w+>", "1", rule.rule)
+        path = path.replace("<path:src>", "x.xhtml")
+        r = client.get(path, follow_redirects=False)
+        assert r.status_code < 500, f"{rule.rule} -> {r.status_code}"
+        checked += 1
+    assert checked >= 15, f"обойдено только {checked} роутов"

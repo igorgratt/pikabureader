@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS settings (
 # ключ = номер версии, значение = SQL-скрипт апгрейда. Порядок применяется
 # по возрастанию, каждая миграция выполняется транзакционно и поднимает
 # PRAGMA user_version. SCHEMA — только для создания новой базы с нуля.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 MIGRATIONS: dict[int, str] = {
     2: """
@@ -116,6 +116,11 @@ MIGRATIONS: dict[int, str] = {
     6: """
     ALTER TABLE chapters ADD COLUMN source TEXT NOT NULL DEFAULT '';
     """,
+    # 7: data-only — опасные схемы URL (javascript:/data:) в старых импортах
+    # вырезаются python-бэкфиллом в init_db (см. start < 7)
+    7: """
+    SELECT 1;
+    """,
 }
 
 
@@ -156,6 +161,23 @@ def init_db() -> None:
             rows = conn.execute("SELECT id, html FROM chapters").fetchall()
             for r in rows:
                 fixed = neutralize_dead_links(r["html"])
+                if fixed != r["html"]:
+                    conn.execute(
+                        "UPDATE chapters SET html = ? WHERE id = ?", (fixed, r["id"])
+                    )
+        if start < 7:
+            # Q8: в старых импортах могли сохраниться href/src с опасными
+            # схемами (javascript:, data:) — вырезаем, как при новом импорте
+            from parsers import _safe_url  # лениво: db не тянет ebooklib без нужды
+
+            attr = re.compile(r'(\s(?:href|src)\s*=\s*)(["\'])([^"\']*)\2', re.I)
+
+            def _fix(m: re.Match) -> str:
+                return "" if not _safe_url(m.group(3)) else m.group(0)
+
+            rows = conn.execute("SELECT id, html FROM chapters").fetchall()
+            for r in rows:
+                fixed = attr.sub(_fix, r["html"] or "")
                 if fixed != r["html"]:
                     conn.execute(
                         "UPDATE chapters SET html = ? WHERE id = ?", (fixed, r["id"])

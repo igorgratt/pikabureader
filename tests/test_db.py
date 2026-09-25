@@ -222,3 +222,35 @@ def test_neutralize_dead_links():
                   '<a href="/story/5">5</a><a href="/goto/1/Text/n.xhtml">6</a>'
     # идемпотентна
     assert db.neutralize_dead_links(out) == out
+
+
+def test_v7_strips_dangerous_url_schemes(isolated_db):
+    """Миграция 7: опасные схемы URL в старых импортах вырезаются при подъёме."""
+    conn = sqlite3.connect(isolated_db / "app.db")
+    conn.executescript(db.SCHEMA)
+    conn.execute("INSERT INTO books(title, author, created_at) VALUES('t','a','x')")
+    conn.execute(
+        "INSERT INTO chapters(book_id, ord, title, html, created_at) VALUES("
+        "1, 1, 'h', "
+        "'<p><a href=\"javascript:alert(1)\">1</a> "
+        "<a href=\"data:text/html,x\">2</a> "
+        "<a href=\"#n1\">3</a> "
+        "<img src=\"javascript:alert(2)\" alt=\"i\"> "
+        "<img src=\"/media/images/1/x.png\" alt=\"ok\"></p>', 'x')"
+    )
+    conn.commit()
+    conn.close()
+    assert db.schema_version() == 0
+
+    db.init_db()
+    assert db.schema_version() == db.SCHEMA_VERSION == 7
+    conn = db.connect()
+    try:
+        html = conn.execute("SELECT html FROM chapters WHERE id = 1").fetchone()["html"]
+    finally:
+        conn.close()
+    assert "javascript:" not in html
+    assert "data:" not in html
+    assert ">1" in html and ">2" in html  # текст ссылок цел
+    assert '<a href="#n1">3</a>' in html  # безопасные ссылки целы
+    assert 'src="/media/images/1/x.png"' in html

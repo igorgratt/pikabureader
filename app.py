@@ -18,7 +18,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -52,6 +52,8 @@ def _load_secret_key() -> str:
 app.secret_key = _load_secret_key()
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 app.config["VERSION"] = __version__
+# явные флаги cookie сессии (HTTP-only уже включён по умолчанию Flask)
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 
 def get_db() -> sqlite3.Connection:
@@ -107,7 +109,10 @@ def login():
         if stored and _check_password(stored, password):
             session["owner"] = 1
             nxt = request.args.get("next") or ""
-            if nxt.startswith("/") and not nxt.startswith("//"):
+            # только локальные пути: без //host, /\host (браузеры нормализуют
+            # обратный слэш в протокол-относительный URL) и без ..-сегментов
+            if (nxt.startswith("/") and not nxt.startswith("//")
+                    and "\\" not in nxt and ".." not in nxt):
                 return redirect(nxt)
             return redirect(url_for("feed"))
         flash("Неверный пароль")

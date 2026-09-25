@@ -128,8 +128,10 @@ settings(key PK, value)   -- theme, font, size, width
 
 ## Тестирование
 
-- `python -m pyflakes app.py db.py parsers tests` — линт (в CI, job `test`).
-- `python -m pytest tests/ -q` — pytest-набор (в CI): парсеры, миграции БД, роуты и JSON API, стили.
+- `python -m pyflakes app.py db.py parsers pika.py tests` — линт (в CI, job `test`).
+- `python -m pytest tests/ -q` — pytest-набор (в CI): парсеры, миграции БД, роуты и JSON API, стили, CLI, security-регресс.
+- Регресс-обход: `test_smoke_all_get_routes` проходит по всем GET-роутам `url_map` и требует отсутствия 5xx.
+- Security-тесты (Q8): схемы URL в санитайзере, `next` в логине, path traversal в `/covers` и `/media`, zip-slip в restore — см. [security.md](security.md).
 - E2E smoke (Q4): `tests/test_e2e.py` — Playwright со системным Chrome (headless) против живого сервера на эфемерном порту с временной базой: импорт EPUB → лента → страница главы → заметка. Без установленного `playwright` тест скипается.
 - Функциональная проверка: импорт тестовых EPUB/FB2, обход всех маршрутов (200), вызовы JSON API, отдача обложек/картинок.
 - Ограничение: скриншотных тестов нет — вёрстка проверяется вручную в браузере.
