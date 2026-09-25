@@ -43,6 +43,8 @@ body {
 a { color: var(--link); text-decoration: none; }
 a:hover { text-decoration: underline; }
 img { max-width: 100%; }
+/* атрибут hidden должен побеждать авторские display (toc-pop, quote-chip и т.п.) */
+[hidden] { display: none !important; }
 
 /* ---------------- topbar ---------------- */
 .topbar {

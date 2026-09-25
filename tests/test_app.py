@@ -626,3 +626,18 @@ def test_theme_contrast_wcag_aa():
                 assert ratio >= 4.5, f"{name}: {fg} на {bg} = {ratio:.2f}"
         # тёмный текст на жёлтом акценте (кнопки/активные вкладки)
         assert _contrast("#1a1a1a", theme["--accent"]) >= 4.5
+
+
+# ---------------- UI: hidden должен побеждать авторские display
+
+def test_hidden_attribute_overrides_display():
+    """Панель оглавления (.toc-pop, display:flex) обязана скрываться по hidden."""
+    import pathlib
+    import re as _re
+
+    css = pathlib.Path("static/css/pikabu.css").read_text(encoding="utf-8")
+    assert _re.search(
+        r"\[hidden\]\s*\{\s*display:\s*none\s*!important\s*;?\s*\}", css
+    ), "нет глобального правила [hidden] { display: none !important }"
+    m = _re.search(r"\.toc-pop\s*\{(.*?)\}", css, _re.S)
+    assert m and "display: flex" in m.group(1)
