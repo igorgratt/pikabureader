@@ -14,7 +14,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -23,8 +23,31 @@ COVER_DIR = os.path.join(db.DATA_DIR, "covers")
 IMPORT_LOG = os.path.join(db.DATA_DIR, "import.log")
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "pikabureader-local")
+
+
+def _load_secret_key() -> str:
+    """Секрет сессий: env SECRET_KEY, иначе случайный, сохранённый в data/."""
+    env = os.environ.get("SECRET_KEY", "")
+    if env:
+        return env
+    path = os.path.join(db.DATA_DIR, "secret_key")
+    try:
+        with open(path, encoding="ascii") as f:
+            key = f.read().strip()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+    key = uuid.uuid4().hex + uuid.uuid4().hex
+    os.makedirs(db.DATA_DIR, exist_ok=True)
+    with open(path, "w", encoding="ascii") as f:
+        f.write(key)
+    return key
+
+
+app.secret_key = _load_secret_key()
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
+app.config["VERSION"] = __version__
 
 
 def get_db() -> sqlite3.Connection:
@@ -59,7 +82,7 @@ def _check_password(stored: str, password: str) -> bool:
 def _gate():
     """Доступ к инстансу: если задан пароль — требуется вход (D3)."""
     ep = request.endpoint
-    if ep in ("static", "login", "logout"):
+    if ep in ("static", "login", "logout", "healthz"):
         return None
     stored = db.get_settings().get("password_hash", "")
     if not stored or session.get("owner"):
@@ -91,6 +114,15 @@ def login():
 def logout():
     session.clear()
     return redirect(url_for("login"))
+
+
+@app.route("/healthz")
+def healthz():
+    """Лёгкий healthcheck для Docker/CI: без БД, без авторизации."""
+    return Response(
+        json.dumps({"ok": True, "version": app.config["VERSION"]}),
+        mimetype="application/json",
+    )
 
 
 # ---------------------------------------------------------------- D2: профили

@@ -1,7 +1,15 @@
 data/
 .git/
+.github/
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 *.log
+.pytest_cache/
+docs/
+*.md
+Dockerfile
+docker-compose.yml
+.dockerignore
+.gitignore

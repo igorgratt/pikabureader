@@ -26,3 +26,36 @@ jobs:
 
       - name: Tests (pytest)
         run: python -m pytest tests/ -q
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t pikabureader:ci .
+
+      - name: Run container
+        run: |
+          docker run -d --name pika -p 8000:8000 pikabureader:ci
+
+      - name: Smoke test (healthcheck, pages, healthz)
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/healthz; then break; fi
+            if [ "$i" = 30 ]; then echo "server did not come up"; exit 1; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/ | grep -q "PikaBuReader"
+          curl -fsS http://127.0.0.1:8000/login | grep -q "Пароль"
+          for i in $(seq 1 30); do
+            st=$(docker inspect --format '{{.State.Health.Status}}' pika)
+            if [ "$st" = "healthy" ]; then break; fi
+            if [ "$i" = 30 ]; then echo "health status: $st"; exit 1; fi
+            sleep 2
+          done
+          docker exec pika python -c "import app; print('version', app.app.config['VERSION'])"
+
+      - name: Logs on failure
+        if: failure()
+        run: docker logs pika

@@ -7,6 +7,20 @@
 python -m pytest tests/ -q
 ```
 
+## v0.4.1 — Docker дошёл до ума (2026-09-25)
+
+- `GET /healthz`: лёгкий healthcheck (без БД и без входа) — используется в
+  `HEALTHCHECK` Dockerfile и в `healthcheck:` docker-compose
+- CI: job `docker` — сборка образа, запуск контейнера, smoke-тест
+  (healthz, лента, страница входа, статус health, версия внутри образа);
+  D6 закрыт: сборка проверена на каждом push
+- Безопасность сессий: вместо фиксированного `secret_key` — `SECRET_KEY`
+  из env или случайный, сохранённый в `data/secret_key` (переживает
+  рестарты через volume)
+- Dockerfile: пин `python:3.13-slim-bookworm`; `.dockerignore` расширен
+  (`.github`, `docs`, `.pytest_cache`, md-файлы)
+- Тесты: 54 (healthz)
+
 ## v0.4.0 — Волна 5: общий сервер (2026-09-25)
 
 **Доступ**

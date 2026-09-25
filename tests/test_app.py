@@ -194,6 +194,13 @@ def test_login_open_when_no_password(client):
     assert r.status_code == 200
 
 
+def test_healthz(client):
+    r = client.get("/healthz")
+    assert r.status_code == 200
+    body = r.get_json()
+    assert body["ok"] is True and body["version"]
+
+
 # ---------------------------------------------------------------- D2: профили
 
 def test_profiles_isolate_progress(client):
