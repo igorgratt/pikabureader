@@ -7,6 +7,11 @@
   <div class="feed-sub">{{ rows | length }} глав</div>
 </div>
 
+<div class="subtabs">
+  <a class="subtab {{ 'is-active' if heading == 'Закладки' }}" href="{{ url_for('bookmarks') }}">Закладки</a>
+  <a class="subtab {{ 'is-active' if heading == 'Недавно читал' }}" href="{{ url_for('history') }}">Недавно читал</a>
+</div>
+
 {% for r in rows %}
 <article class="story-card" data-chapter="{{ r.id }}">
   <header class="story-head">
@@ -18,7 +23,7 @@
       {% endif %}
       <span class="community-name">{{ r.book_title }}</span>
     </a>
-    <span class="story-meta">Глава {{ r.ord }} · {{ r.author }}</span>
+    <span class="story-meta">Глава {{ r.ord }} · {{ r.author }}{% if heading == 'Недавно читал' and r.last_read_at %} · {{ r.last_read_at }}{% endif %}</span>
   </header>
   <h2 class="story-title"><a href="{{ url_for('story', chapter_id=r.id) }}">{{ r.title }}</a></h2>
   {% if r.bookmark_quote is defined and r.bookmark_quote %}
@@ -33,10 +38,12 @@
       <span class="rating-num {{ 'is-pos' if r.rating > 0 else ('is-neg' if r.rating < 0 else '') }}">{{ r.rating | num }}</span>
       <button class="rate-btn rate-down" data-delta="-1">▼</button>
     </div>
+    {% if heading == 'Закладки' %}
     <button class="foot-btn bookmark-btn is-active" data-chapter="{{ r.id }}" type="button">🔖 в закладках</button>
+    {% endif %}
   </footer>
 </article>
 {% else %}
-  <div class="empty-state"><p>Нет сохранённых закладок.</p></div>
+  <div class="empty-state"><p>{{ 'Ещё ничего не читали.' if heading == 'Недавно читал' else 'Нет сохранённых закладок.' }}</p></div>
 {% endfor %}
 {% endblock %}

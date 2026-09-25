@@ -17,7 +17,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.7.0"
+__version__ = "0.7.1"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -377,6 +377,26 @@ def bookmarks():
     finally:
         conn.close()
     return render_template("list.html", rows=rows, heading="Закладки")
+
+
+@app.route("/history")
+def history():
+    """N7: недавно читал — последние 20 глав профиля."""
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            """SELECT c.*, b.title book_title, b.author, b.cover, b.id bid,
+                      s.read_pct, s.done, s.bookmark_quote, s.last_read_at
+               FROM state s JOIN chapters c ON c.id = s.chapter_id
+               JOIN books b ON b.id = c.book_id
+               WHERE s.profile_id = ?
+               ORDER BY s.last_read_at DESC
+               LIMIT 20""",
+            (_profile_id(),),
+        ).fetchall()
+    finally:
+        conn.close()
+    return render_template("list.html", rows=rows, heading="Недавно читал")
 
 
 @app.route("/notes/export")

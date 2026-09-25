@@ -97,6 +97,55 @@ def test_api_chapter_bad_payload(client):
     )
 
 
+# ---------------------------------------------------------------- N7: недавно читал
+
+def seed_history(profile_id=1, n=22):
+    """n глав с read-состоянием: глава n — самая свежая по last_read_at."""
+    conn = db.connect()
+    try:
+        for i in range(1, n + 1):
+            cur = conn.execute(
+                "INSERT INTO books(title, created_at) VALUES(?, '2026-01-01 00:00:00')",
+                (f"Книга {i}",),
+            )
+            cur = conn.execute(
+                "INSERT INTO chapters(book_id, ord, title, html, words, created_at) "
+                "VALUES(?, 1, ?, ?, 4, '2026-01-01 00:00:00')",
+                (cur.lastrowid, f"Глава {i}", f"<p>Текст {i}</p>"),
+            )
+            conn.execute(
+                "INSERT INTO state(chapter_id, profile_id, read_pct, last_read_at) "
+                "VALUES(?, ?, 50, ?)",
+                (cur.lastrowid, profile_id, f"2026-01-{i:02d} 12:00:00"),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def test_history_recent_20_desc(client):
+    seed_history()
+    r = client.get("/history")
+    assert r.status_code == 200
+    html = r.get_data(as_text=True)
+    assert "Недавно читал" in html
+    assert html.count('class="story-card"') == 20
+    # свежие первыми (22 раньше 3), самые старые (1, 2) отброшены
+    assert html.index("Глава 22") < html.index("Глава 3")
+    assert ">Глава 1<" not in html
+
+
+def test_history_empty(client):
+    html = client.get("/history").get_data(as_text=True)
+    assert "Ещё ничего не читали." in html
+
+
+def test_history_profile_isolation(client):
+    seed_history(profile_id=2, n=3)
+    html = client.get("/history").get_data(as_text=True)
+    assert "Ещё ничего не читали." in html
+
+
 # ---------------------------------------------------------------- N3
 
 def test_story_has_toc(client):
