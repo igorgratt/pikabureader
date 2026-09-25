@@ -2,7 +2,7 @@
 
 Локальная читалка для электронных книг в формате ленты Pikabu: книга — «сообщество», глава — «пост», заметки — «комментарии», оценки глав — «плюсы/минусы».
 
-**Версия:** `0.10.0` — см. [CHANGELOG.md](CHANGELOG.md); версии отмечены тегами `vX.Y.Z` в git.
+**Версия:** `0.11.0` — см. [CHANGELOG.md](CHANGELOG.md); версии отмечены тегами `vX.Y.Z` в git.
 
 ## Возможности
 
@@ -96,7 +96,7 @@ data/             # база, обложки, картинки, загружен
 
 ```bash
 pip install -r requirements-dev.txt
-python -m pytest tests/ -q    # 108 тестов
+python -m pytest tests/ -q    # 111 тестов
 ```
 
 Та же проверка гоняется в CI (GitHub Actions) на каждый push и pull request.

@@ -243,7 +243,7 @@ def test_v7_strips_dangerous_url_schemes(isolated_db):
     assert db.schema_version() == 0
 
     db.init_db()
-    assert db.schema_version() == db.SCHEMA_VERSION == 7
+    assert db.schema_version() == db.SCHEMA_VERSION
     conn = db.connect()
     try:
         html = conn.execute("SELECT html FROM chapters WHERE id = 1").fetchone()["html"]

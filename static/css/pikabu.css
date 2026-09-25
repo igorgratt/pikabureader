@@ -737,6 +737,34 @@ kbd {
 }
 .library-progress { color: var(--text-2); font-size: 12px; margin-top: 3px; }
 
+/* ---------------- R7: статистика чтения ---------------- */
+.stats-cards { display: flex; gap: 16px; flex-wrap: wrap; }
+.stats-card { flex: 1 1 170px; text-align: center; padding: 10px 8px; }
+.stats-num { font-size: 30px; font-weight: 900; line-height: 1.1; }
+.stats-label { color: var(--text-2); font-size: 13px; margin-top: 4px; }
+.week-chart { display: flex; gap: 6px; align-items: stretch; height: 130px; }
+.week-col {
+  flex: 1; display: flex; flex-direction: column; justify-content: flex-end;
+  min-width: 0; text-align: center;
+}
+.week-bar {
+  background: var(--accent); border-radius: 3px 3px 0 0;
+  min-height: 3px; transition: height .2s;
+}
+.week-day { font-size: 11px; color: var(--text-2); margin-top: 5px; }
+.stat-books { display: flex; flex-direction: column; gap: 8px; }
+.stat-book {
+  display: grid; grid-template-columns: minmax(0, 1fr) 140px auto;
+  gap: 12px; align-items: center; color: inherit;
+}
+.stat-book:hover { text-decoration: none; }
+.stat-book:hover .stat-book-title { background: var(--accent); color: #1a1a1a; }
+.stat-book-title {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-radius: 4px; padding: 2px 4px; margin-left: -4px;
+}
+.stat-book-meta { font-size: 13px; color: var(--text-2); white-space: nowrap; }
+
 /* ---------------- responsive ---------------- */
 .tabbar { display: none; }
 .topbar { transition: transform .2s; }
@@ -754,6 +782,8 @@ kbd {
   .story-page, .notes { padding: 16px; }
   .story-title-lg { font-size: 22px; }
   .btn-accent { padding: 8px 10px; font-size: 13px; }
+  .stat-book { grid-template-columns: minmax(0, 1fr) 70px auto; gap: 8px; }
+  .stat-book-meta { font-size: 12px; }
 
   /* M3: нижняя навигация вместо сайдбаров */
   .tabbar {

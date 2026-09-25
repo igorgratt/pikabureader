@@ -3,6 +3,7 @@ import os
 import re
 import urllib.parse
 import zipfile
+from datetime import date, timedelta
 
 import pytest
 
@@ -934,3 +935,61 @@ def test_smoke_all_get_routes(client):
         assert r.status_code < 500, f"{rule.rule} -> {r.status_code}"
         checked += 1
     assert checked >= 15, f"обойдено только {checked} роутов"
+
+
+# ---------------------------------------------------------------- R7: статистика
+
+def test_progress_writes_read_log(client):
+    """Прогресс чтения попадает в журнал по дням (слов, максимум за день)."""
+    cid = seed()  # глава: 4 слова
+    r = client.post("/api/progress", json={"chapter_id": cid, "pct": 50, "done": 0})
+    assert r.status_code == 200
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            "SELECT words FROM read_log WHERE chapter_id = ? AND day = ?",
+            (cid, db.today()),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None and row["words"] == 2  # 4 слова × 50%
+
+    # прокрутили назад и послали меньший pct — дневной максимум не падает
+    client.post("/api/progress", json={"chapter_id": cid, "pct": 30, "done": 0})
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            "SELECT words FROM read_log WHERE chapter_id = ? AND day = ?",
+            (cid, db.today()),
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row["words"] == 2
+
+
+def test_stats_page(client):
+    """/stats: сегодняшние слова, серия, прогресс книги."""
+    cid = seed()
+    client.post("/api/progress", json={"chapter_id": cid, "pct": 100, "done": 1})
+    page = client.get("/stats").get_data(as_text=True)
+    assert "Статистика чтения" in page
+    assert "слов прочитано сегодня" in page
+    assert "дней подряд" in page
+    assert "100%" in page and "Тест" in page  # книга прочитана
+    assert "Последние 7 дней" in page
+
+
+def test_streak_series():
+    """Серия дней подряд: живёт без сегодняшнего чтения, рвётся на пропуске."""
+    import app as app_module
+
+    today = db.today()
+    day = lambda n: (date.fromisoformat(today) - timedelta(days=n)).isoformat()
+    s = app_module._streak
+    assert s([], today) == 0
+    assert s([today], today) == 1
+    assert s([today, day(1)], today) == 2
+    assert s([today, day(1), day(2)], today) == 3
+    assert s([day(1)], today) == 1  # сегодня ещё не читали — серия жива
+    assert s([day(2)], today) == 0  # вчера пропуск — серии нет
+    assert s([today, day(2)], today) == 1  # вчера пропуск — серия с сегодня

@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS settings (
 # ключ = номер версии, значение = SQL-скрипт апгрейда. Порядок применяется
 # по возрастанию, каждая миграция выполняется транзакционно и поднимает
 # PRAGMA user_version. SCHEMA — только для создания новой базы с нуля.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 MIGRATIONS: dict[int, str] = {
     2: """
@@ -120,6 +120,16 @@ MIGRATIONS: dict[int, str] = {
     # вырезаются python-бэкфиллом в init_db (см. start < 7)
     7: """
     SELECT 1;
+    """,
+    # 8: R7 — журнал чтения по дням (слов на день, серия дней)
+    8: """
+    CREATE TABLE IF NOT EXISTS read_log (
+        profile_id INTEGER NOT NULL DEFAULT 1,
+        day TEXT NOT NULL,
+        chapter_id INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+        words INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (profile_id, day, chapter_id)
+    );
     """,
 }
 
@@ -267,6 +277,11 @@ def default_profile_id() -> int:
 
 def now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def today() -> str:
+    """Сегодняшний день (UTC) — для дневной статистики чтения (R7)."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
 
 
 def get_settings() -> dict:

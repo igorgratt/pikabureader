@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Статистика чтения — PikaBuReader{% endblock %}
+
+{% block content %}
+<h1>Статистика чтения</h1>
+
+<section class="settings-card stats-cards">
+  <div class="stats-card">
+    <div class="stats-num">{{ day.words | num }}</div>
+    <div class="stats-label">слов прочитано сегодня · {{ day.chapters }} гл.</div>
+  </div>
+  <div class="stats-card">
+    <div class="stats-num">{{ streak }}</div>
+    <div class="stats-label">дней подряд без пропусков</div>
+  </div>
+</section>
+
+<section class="settings-card">
+  <h2 class="settings-title">Последние 7 дней</h2>
+  <div class="week-chart">
+    {% for d in week %}
+    <div class="week-col" title="{{ d.day }} — {{ d.words | num }} слов">
+      <div class="week-bar"{% if week_max %} style="height: {{ (d.words * 100 / week_max) | round | int }}%"{% endif %}></div>
+      <span class="week-day">{{ d.day[8:] }}</span>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="settings-card">
+  <h2 class="settings-title">Прогресс по книгам</h2>
+  {% if books %}
+  <div class="stat-books">
+    {% for b in books %}
+    <a class="stat-book" href="{{ url_for('book_page', book_id=b.id) }}">
+      <span class="stat-book-title">{{ b.title }}</span>
+      <span class="progress-bar stat-book-bar"><span class="progress-fill" style="width: {{ b.pct }}%"></span></span>
+      <span class="stat-book-meta">{{ b.pct }}% · {{ b.done }}/{{ b.total }} гл.</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="settings-desc">Книг пока нет — добавьте первую в «Добавить книгу».</p>
+  {% endif %}
+</section>
+{% endblock %}

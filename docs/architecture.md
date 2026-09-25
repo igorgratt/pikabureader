@@ -46,7 +46,8 @@ pikabureader/
 books(id, title, author, cover, tags, description, created_at)
   └─ chapters(id, book_id→books, ord, title, html, words, source, rating, created_at)
        ├─ notes(id, chapter_id→chapters, parent_id→notes, text, rating, created_at)
-       └─ state(chapter_id→chapters PK, bookmark, done, read_pct, last_read_at)
+       ├─ state(chapter_id→chapters PK, bookmark, done, read_pct, last_read_at)
+       └─ read_log(profile_id, day, chapter_id PK, words)   -- R7: дневная статистика
 settings(key PK, value)   -- theme, font, size, width
 ```
 
@@ -54,6 +55,7 @@ settings(key PK, value)   -- theme, font, size, width
 - `chapters.source` — файл-источник главы в архиве EPUB (для ссылок `/goto`); пусто у FB2/PDF/TXT.
 - `notes.parent_id` — дерево заметок (ответы); каскадное удаление при удалении книги/главы.
 - `state` — одна строка на главу: закладка, флаг «прочитано», прогресс в процентах. При обновлении прогресса применяется `MAX` — позиция не откатывается при повторном открытии сверху.
+- `read_log` — прочитанные слова по (профиль, день, глава): обновляется при `/api/progress` с `MAX` за день; каскадно чистится при удалении главы. Источник для `/stats` (слов за день, серия дней).
 - `settings` — глобальные настройки чтения, читаются в context processor и попадают в `window.READER.settings`.
 
 Все подключения включают `PRAGMA foreign_keys = ON`.
@@ -65,6 +67,7 @@ settings(key PK, value)   -- theme, font, size, width
 | GET | `/` | Лента. Параметры: `t=hot\|new\|library\|reading`, `p` (страница), `q` (поиск по книге/автору) |
 | GET | `/bookmarks` | Список закладок |
 | GET | `/history` | «Недавно читал» — последние 20 глав профиля (N7) |
+| GET | `/stats` | Статистика чтения: слов сегодня, серия дней, неделя, прогресс по книгам (R7) |
 | GET | `/book/<id>` | Страница книги с оглавлением |
 | GET | `/story/<id>` | Страница главы + заметки |
 | GET | `/goto/<book_id>/<path>` | Внутрикнижная ссылка (сноска): редирект на главу с якорем `?frag=`, файл не импортирован — на первую главу книги |
@@ -80,7 +83,7 @@ settings(key PK, value)   -- theme, font, size, width
 |---|---|---|
 | `/api/rate` | `{target: "chapter"\|"note", id, delta: 1\|-1}` | Оценка главы или заметки |
 | `/api/chapter` | `{chapter_id}` | Полный HTML главы — «Читать далее» разворачивает карточку в ленте (R6) |
-| `/api/progress` | `{chapter_id, pct, done?}` | Позиция чтения (`read_pct = MAX(...)`) |
+| `/api/progress` | `{chapter_id, pct, done?}` | Позиция чтения (`read_pct = MAX(...)`) + журнал `read_log` за сегодня (R7) |
 | `/api/bookmark` | `{chapter_id}` | Переключает закладку, возвращает новое состояние |
 | `/api/note` | `{chapter_id, parent_id?, text}` | Создаёт заметку/ответ, возвращает запись |
 | `/api/note/delete` | `{id}` | Удаляет заметку (с потомками — каскад) |

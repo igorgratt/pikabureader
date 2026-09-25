@@ -9,6 +9,7 @@ import sqlite3
 import urllib.parse
 import uuid
 import zipfile
+from datetime import date, timedelta
 from functools import wraps
 from html import escape as _escape
 
@@ -18,7 +19,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.10.0"
+__version__ = "0.11.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -403,6 +404,91 @@ def history():
     finally:
         conn.close()
     return render_template("list.html", rows=rows, heading="Недавно читал")
+
+
+def _streak(days_desc: list, today: str) -> int:
+    """R7: серия дней подряд с чтением. Если сегодня ещё не читали,
+    серия считается от вчерашнего дня — в течение дня она не прерывается."""
+    if not days_desc:
+        return 0
+    cur = date.fromisoformat(today)
+    if days_desc[0] != today:
+        cur -= timedelta(days=1)
+        if days_desc[0] != cur.isoformat():
+            return 0
+    n = 0
+    while n < len(days_desc) and days_desc[n] == cur.isoformat():
+        n += 1
+        cur -= timedelta(days=1)
+    return n
+
+
+@app.route("/stats")
+def stats():
+    """R7: статистика чтения профиля — сегодня, серия, неделя, книги."""
+    pid = _profile_id()
+    conn = get_db()
+    try:
+        today = db.today()
+        day = conn.execute(
+            """SELECT COALESCE(SUM(words), 0) AS words, COUNT(*) AS chapters
+               FROM read_log WHERE profile_id = ? AND day = ?""",
+            (pid, today),
+        ).fetchone()
+        days = [
+            r["day"]
+            for r in conn.execute(
+                """SELECT DISTINCT day FROM read_log
+                   WHERE profile_id = ? ORDER BY day DESC LIMIT 400""",
+                (pid,),
+            ).fetchall()
+        ]
+        week_start = (date.fromisoformat(today) - timedelta(days=6)).isoformat()
+        week_map = {
+            r["day"]: r["words"]
+            for r in conn.execute(
+                """SELECT day, SUM(words) AS words FROM read_log
+                   WHERE profile_id = ? AND day >= ? GROUP BY day""",
+                (pid, week_start),
+            ).fetchall()
+        }
+        week = [
+            {"day": d, "words": week_map.get(d, 0)}
+            for d in (
+                (date.fromisoformat(today) - timedelta(days=i)).isoformat()
+                for i in range(6, -1, -1)
+            )
+        ]
+        raw_books = conn.execute(
+            """SELECT b.id, b.title, b.author, b.cover, COUNT(c.id) AS total,
+                      COALESCE(SUM(s.done), 0) AS done,
+                      COALESCE(SUM(c.words * COALESCE(s.read_pct, 0)), 0) AS read_w,
+                      COALESCE(SUM(c.words), 0) AS total_w
+               FROM books b
+               JOIN chapters c ON c.book_id = b.id
+               LEFT JOIN state s ON s.chapter_id = c.id AND s.profile_id = ?
+               GROUP BY b.id
+               ORDER BY read_w * 1.0 / NULLIF(total_w, 0) DESC, b.id""",
+            (pid,),
+        ).fetchall()
+        books = [
+            {
+                **dict(r),
+                "pct": round(r["read_w"] * 100 / r["total_w"]) if r["total_w"] else 0,
+            }
+            for r in raw_books
+        ]
+    finally:
+        conn.close()
+    return render_template(
+        "stats.html",
+        day=day,
+        streak=_streak(days, today),
+        week=week,
+        week_max=max((d["words"] for d in week), default=0),
+        books=books,
+        today=today,
+    )
 
 
 @app.route("/notes/export")
@@ -1103,6 +1189,18 @@ def api_progress():
                  done = MAX(state.done, excluded.done),
                  last_read_at = excluded.last_read_at""",
             (cid, pid, pct_, done, db.now()),
+        )
+        # R7: журнал по дням — прочитанные слова за сегодня (максимум за день)
+        row = conn.execute(
+            "SELECT words FROM chapters WHERE id = ?", (cid,)
+        ).fetchone()
+        read_words = int(round((row["words"] if row else 0) * pct_ / 100))
+        conn.execute(
+            """INSERT INTO read_log(profile_id, day, chapter_id, words)
+               VALUES(?,?,?,?)
+               ON CONFLICT(profile_id, day, chapter_id) DO UPDATE SET
+                 words = MAX(read_log.words, excluded.words)""",
+            (pid, db.today(), cid, read_words),
         )
         conn.commit()
     finally:

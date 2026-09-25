@@ -1,5 +1,5 @@
 /* PikaBuReader service worker: статика cache-first, страницы network-first. */
-const CACHE = "pikabu-v4";
+const CACHE = "pikabu-v5";
 const STATIC = [
   "/static/css/pikabu.css",
   "/static/js/reader.js",
