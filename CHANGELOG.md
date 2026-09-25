@@ -7,6 +7,19 @@
 python -m pytest tests/ -q
 ```
 
+## v0.17.0 — Волна 15: Android (M11) (2026-09-25)
+
+- **M11 «Android-приложение»**: TWA-обёртка для Google Play и прямого APK
+- `twa-manifest.json` — конфигурация TWA (package name, host, иконки) для
+  Bubblewrap; `tools/build_android.ps1` — PowerShell-скрипт, инициализирует
+  проект через `bubblewrap init`, копирует ассеты, собирает `app-debug.apk`
+- `docs/android.md` — полное руководство: установка через PWA (Chrome →
+  «На главный экран»), сборка APK (Bubblewrap + JDK 17 + Android SDK),
+  установка через ADB, asset links для Google Play, подпись релизного APK
+- `manifest.webmanifest`: добавлено поле `id: "/"`, категории `books/entertainment`,
+  `prefer_related_applications: false` — чёткий сигнал браузеру что это standalone app
+- Иконки: `icon-192.png` и `icon-512.png` (maskable) уже в репозитории
+
 ## v0.16.0 — Волна 14: синхронизация (M6) (2026-09-25)
 
 - **M6 «Синхронизация»**: device-tokens для авторизации внешних клиентов

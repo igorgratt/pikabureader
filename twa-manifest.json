@@ -1,0 +1,31 @@
+{
+  "packageName": "app.pikabureader",
+  "host": "https://pikabu.example.com",
+  "name": "PikaBuReader",
+  "shortName": "PikaBu",
+  "launchUrl": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "themeColor": "#ffd600",
+  "backgroundColor": "#eceef1",
+  "icons": [
+    {
+      "src": "static/icons/icon-192.png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "static/icons/icon-512.png",
+      "sizes": "512x512"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Лента",
+      "short_name": "Лента",
+      "url": "/",
+      "icons": [{ "src": "static/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ],
+  "generator": "pikabureader-tools"
+}
