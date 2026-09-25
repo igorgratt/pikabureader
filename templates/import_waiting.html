@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Подготовка предпросмотра — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="feed-head">
+  <h1>Подготовка предпросмотра</h1>
+  <div class="feed-sub">Книга парсится, это займёт несколько секунд…</div>
+</div>
+
+<div class="settings-card">
+  <div class="import-card import-pending">
+    <span class="import-badge import-badge-pending">⏳ обрабатывается</span>
+    {% if pending and pending.filename %}<code class="import-file">{{ pending.filename }}</code>{% endif %}
+  </div>
+</div>
+
+<div style="text-align:center; margin-top:24px">
+  <a class="btn" href="{{ url_for('add') }}">← Назад к загрузке</a>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function check() {
+    fetch("{{ url_for('api_import_status') }}")
+      .then(r => r.json())
+      .then(data => {
+        if (!data.ok) { setTimeout(check, 1000); return; }
+        const jid = {{ job_id | tojson }};
+        if (!jid) { location.href = "{{ url_for('add') }}"; return; }
+        const job = data.jobs.find(j => j.id === jid);
+        if (!job) { location.href = "{{ url_for('add') }}"; return; }
+        if (job.status === "done") {
+          location.href = "{{ url_for('add_preview') }}";
+        } else if (job.status === "error") {
+          alert("Ошибка: " + (job.msg || "неизвестно"));
+          location.href = "{{ url_for('add') }}";
+        } else {
+          setTimeout(check, 600);
+        }
+      })
+      .catch(() => setTimeout(check, 1500));
+  }
+  const jid = {{ job_id | tojson }};
+  if (jid) check();
+</script>
+{% endblock %}

@@ -3,9 +3,13 @@ import hmac
 import io
 import json
 import os
+import pickle
 import posixpath
 import re
+import shutil
 import sqlite3
+import threading
+import time
 import urllib.parse
 import uuid
 import zipfile
@@ -19,7 +23,7 @@ from flask import (Flask, Response, abort, flash, redirect, render_template,
 import db
 from parsers import parse_book
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(db.DATA_DIR, "uploads")
@@ -59,6 +63,143 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 def get_db() -> sqlite3.Connection:
     return db.connect()
+
+
+_HAS_PIL = False
+try:
+    from PIL import Image as _PIL_Image
+
+    _HAS_PIL = True
+except ImportError:
+    pass
+
+MAX_IMAGE_DIM = 800  # F8: макс. размер стороны при конвертации в webp
+
+
+def _optimize_image(short: str, data: bytes) -> tuple[str, bytes]:
+    """F8: конвертирует картинку в webp (≤800px), возвращает (новое_имя, байты).
+    При ошибке Pillow или анимированных gif — возвращает исходные (short, data)."""
+    if not _HAS_PIL:
+        return short, data
+    try:
+        img = _PIL_Image.open(io.BytesIO(data))
+        img.load()
+    except Exception:
+        return short, data
+    if getattr(img, "is_animated", False) and img.format == "GIF":
+        return short, data
+    w, h = img.size
+    if max(w, h) > MAX_IMAGE_DIM:
+        ratio = MAX_IMAGE_DIM / max(w, h)
+        img = img.resize((int(w * ratio), int(h * ratio)), _PIL_Image.LANCZOS)
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGB")
+    buf = io.BytesIO()
+    img.save(buf, format="WEBP", quality=80)
+    # если у short нет расширения — берём .webp
+    name = os.path.splitext(short)[0] + ".webp"
+    return name, buf.getvalue()
+
+
+# ---------------------------------------------------------------- F7: очередь импорта
+
+_QUEUE_DIR = os.path.join(db.DATA_DIR, "import_queue")
+_IMPORT_LOCK = threading.Lock()
+_IMPORT_JOBS: dict[str, dict] = {}
+_WORKER_TID: int | None = None
+_JOBS_HISTORY_LIMIT = 100  # макс. задач в памяти
+
+
+def _queue_dir() -> str:
+    d = os.path.join(db.DATA_DIR, "import_queue")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _enqueue(kind: str, path: str, filename: str, mode: str = "parts") -> str:
+    """Положить задачу в очередь, запустить воркер."""
+    jid = uuid.uuid4().hex[:8]
+    with _IMPORT_LOCK:
+        _IMPORT_JOBS[jid] = {
+            "id": jid,
+            "kind": kind,
+            "path": path,
+            "filename": filename,
+            "mode": mode,
+            "status": "queued",
+            "msg": "",
+            "results": [],
+            "added_at": time.time(),
+        }
+        # prune old done jobs
+        done = [k for k, v in _IMPORT_JOBS.items()
+                if v["status"] in ("done", "error") and time.time() - v["added_at"] > 1800]
+        for k in done:
+            del _IMPORT_JOBS[k]
+        global _WORKER_TID
+        if _WORKER_TID is None:
+            t = threading.Thread(target=_worker_loop, daemon=True, name="import-worker")
+            t.start()
+            _WORKER_TID = t.ident
+    return jid
+
+
+def _worker_loop():
+    global _WORKER_TID
+    while True:
+        job = None
+        with _IMPORT_LOCK:
+            for jid, j in _IMPORT_JOBS.items():
+                if j["status"] == "queued":
+                    job = (jid, j); break
+            if job is None:
+                _WORKER_TID = None
+                break
+            jid, j = job
+            j["status"] = "running"
+        try:
+            if j["kind"] == "bulk":
+                _run_bulk_job(j)
+            elif j["kind"] == "preview":
+                _run_preview_job(j)
+        except Exception:
+            import traceback; traceback.print_exc()
+            with _IMPORT_LOCK:
+                if jid in _IMPORT_JOBS:
+                    _IMPORT_JOBS[jid]["status"] = "error"
+                    _IMPORT_JOBS[jid]["msg"] = "Внутренняя ошибка воркера"
+        # переходим к следующей задаче
+
+
+def _run_bulk_job(j: dict):
+    """Выполнить bulk-задачу импорта одной книги."""
+    class _Fw:
+        def __init__(self, p, n): self.filename = n; self._path = p
+        def save(self, dst): shutil.copy(self._path, dst)
+    f = _Fw(j["path"], j["filename"])
+    res = _import_one(f, j["mode"])
+    with _IMPORT_LOCK:
+        _IMPORT_JOBS[j["id"]]["results"] = [res]
+        _IMPORT_JOBS[j["id"]]["status"] = "done" if res["status"] == "ok" else "error"
+        _IMPORT_JOBS[j["id"]]["msg"] = res.get("msg", "")
+    _log_import("import", f"{res['file']}: {res['status']} — {res['msg']}")
+    try: os.remove(j["path"])
+    except OSError: pass
+
+
+def _run_preview_job(j: dict):
+    """Спарсить книгу для предпросмотра и закэшировать результат."""
+    try:
+        parsed = parse_book(j["path"])
+        cache_path = j["path"] + ".pkl"
+        with open(cache_path, "wb") as cf:
+            pickle.dump(parsed, cf)
+        with _IMPORT_LOCK:
+            _IMPORT_JOBS[j["id"]]["status"] = "done"
+    except Exception as exc:
+        with _IMPORT_LOCK:
+            _IMPORT_JOBS[j["id"]]["status"] = "error"
+            _IMPORT_JOBS[j["id"]]["msg"] = str(exc)
 
 
 # ---------------------------------------------------------------- D3: пароль
@@ -851,14 +992,13 @@ def _store_book(parsed, chapters, sources: list | None = None) -> dict:
         )
         book_id = cur.lastrowid
 
-        # save assets
+        # F8: save assets (конвертация в webp ≤800px)
         if parsed.assets:
             folder = os.path.join(IMG_DIR, f"book_{book_id}")
             os.makedirs(folder, exist_ok=True)
             mapping = {}
             for archive_name, (short, data) in parsed.assets.items():
-                ext = os.path.splitext(short)[1] or ".jpg"
-                target = f"{os.path.splitext(short)[0]}{ext}"
+                target, data = _optimize_image(short, data)
                 with open(os.path.join(folder, target), "wb") as f:
                     f.write(data)
                 mapping[short] = target
@@ -1049,6 +1189,11 @@ def add():
                     os.remove(pending["path"])
                 except OSError:
                     pass
+                # F7: удаляем кэш предпросмотра
+                try:
+                    os.remove(pending["path"] + ".pkl")
+                except OSError:
+                    pass
         results = session.pop("import_results", None)
         return render_template("add.html", results=results)
     files = [f for f in request.files.getlist("file") if f and f.filename]
@@ -1059,34 +1204,63 @@ def add():
     if request.form.get("preview") == "1" and len(files) == 1:
         path = _save_upload(files[0])
         session["import_pending"] = {"path": path, "filename": files[0].filename}
-        return redirect(url_for("add_preview"))
-    # F3: мультизагрузка — карточки результатов по каждому файлу (F5)
-    results = []
+        # F7: сохраняем файл в очередь и кладём задачу preview
+        qdir = _queue_dir()
+        qpath = os.path.join(qdir, uuid.uuid4().hex[:8] + "_" + re.sub(r"[^\w.\-]+", "_", files[0].filename))
+        os.makedirs(os.path.dirname(qpath), exist_ok=True)
+        shutil.copy(path, qpath)
+        jid = _enqueue("preview", qpath, files[0].filename, "parts")
+        session["import_pending"]["job_id"] = jid
+        return redirect(url_for("import_status", next="preview"))
+    # F3/F7: мультизагрузка — постановка в очередь
+    qdir = _queue_dir()
+    jids = []
     for f in files[:50]:
-        res = _import_one(f)
-        _log_import("import", f"{res['file']}: {res['status']} — {res['msg']}")
-        results.append(res)
-    session["import_results"] = results
-    return redirect(url_for("add"))
+        qpath = os.path.join(qdir, uuid.uuid4().hex[:8] + "_" + re.sub(r"[^\w.\-]+", "_", f.filename))
+        os.makedirs(os.path.dirname(qpath), exist_ok=True)
+        shutil.copy(_save_upload(f), qpath)
+        jids.append(_enqueue("bulk", qpath, f.filename, "parts"))
+    if len(jids) == 1:
+        return redirect(url_for("import_status", jid=jids[0]))
+    return redirect(url_for("import_status"))
 
 
 @app.route("/add/preview")
 def add_preview():
-    """F9: предпросмотр разбивки до импорта — список будущих глав."""
+    """F9/F7: предпросмотр разбивки до импорта — список будущих глав.
+    Если job ещё в очереди — показываем страницу ожидания."""
     pending = session.get("import_pending")
-    if not pending or not os.path.exists(pending["path"]):
+    if not pending or not os.path.exists(pending.get("path", "")):
         flash("Файл для предпросмотра не найден — загрузите заново")
         return redirect(url_for("add"))
+    # F7: проверить статус фонового job
+    job_id = pending.get("job_id")
+    if job_id:
+        with _IMPORT_LOCK:
+            job = _IMPORT_JOBS.get(job_id)
+        if job and job["status"] == "queued":
+            return render_template("import_waiting.html", pending=pending, kind="preview")
+        if job and job["status"] == "running":
+            return render_template("import_waiting.html", pending=pending, kind="preview")
     mode = request.args.get("m", "parts")
     if mode not in SPLIT_MODES:
         mode = "parts"
-    try:
-        parsed = parse_book(pending["path"])
-    except Exception as exc:  # noqa: BLE001
-        session.pop("import_pending", None)
-        err = _import_error(exc, pending["filename"])
-        session["import_results"] = [err]
-        return redirect(url_for("add"))
+    cache_path = pending["path"] + ".pkl"
+    parsed = None
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as cf:
+                parsed = pickle.load(cf)
+        except Exception:
+            pass
+    if parsed is None:
+        try:
+            parsed = parse_book(pending["path"])
+        except Exception as exc:  # noqa: BLE001
+            session.pop("import_pending", None)
+            err = _import_error(exc, pending["filename"])
+            session["import_results"] = [err]
+            return redirect(url_for("add"))
     chapters = _apply_split_mode(parsed.chapters, mode)
     total_chars = sum(len(re.sub(r"<[^>]+>", "", h)) for _, h in chapters)
     return render_template(
@@ -1097,7 +1271,7 @@ def add_preview():
 
 @app.route("/add/import", methods=["POST"])
 def add_commit():
-    """F9: подтверждение импорта с выбранным режимом разбивки."""
+    """F9/F7: подтверждение импорта с выбранным режимом разбивки."""
     pending = session.pop("import_pending", None)
     if not pending or not os.path.exists(pending.get("path", "")):
         flash("Файл для импорта не найден — загрузите заново")
@@ -1105,19 +1279,29 @@ def add_commit():
     mode = request.form.get("mode", "parts")
     if mode not in SPLIT_MODES:
         mode = "parts"
-    try:
-        parsed = parse_book(pending["path"])
-    except Exception as exc:  # noqa: BLE001
-        result = _import_error(exc, pending["filename"])
-    else:
-        chapters, sources = _apply_split_mode(parsed.chapters, mode, parsed.sources)
-        result = _store_book(parsed, chapters, sources)
+    cache_path = pending["path"] + ".pkl"
+    parsed = None
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as cf:
+                parsed = pickle.load(cf)
+        except Exception:
+            pass
+    if parsed is None:
+        try:
+            parsed = parse_book(pending["path"])
+        except Exception as exc:  # noqa: BLE001
+            result = _import_error(exc, pending["filename"])
+            result["file"] = pending["filename"]
+            session["import_results"] = [result]
+            return redirect(url_for("add"))
+    chapters, sources = _apply_split_mode(parsed.chapters, mode, parsed.sources)
+    result = _store_book(parsed, chapters, sources)
     result["file"] = pending["filename"]
     _log_import("import", f"{result['file']}: {result['status']} ({mode}) — {result['msg']}")
-    try:
-        os.remove(pending["path"])
-    except OSError:
-        pass
+    for p in (pending["path"], cache_path):
+        try: os.remove(p)
+        except OSError: pass
     session["import_results"] = [result]
     return redirect(url_for("add"))
 
@@ -1196,6 +1380,48 @@ def api_chapter():
     if row is None:
         raise ValueError("not found")
     return {"ok": True, "html": row["html"]}
+
+
+# ---------------------------------------------------------------- F7: фоновая очередь импорта
+
+@app.get("/api/import/status")
+def api_import_status():
+    with _IMPORT_LOCK:
+        for jid in list(_IMPORT_JOBS.keys()):
+            j = _IMPORT_JOBS[jid]
+            if j["status"] in ("done", "error") and time.time() - j["added_at"] > 1800:
+                del _IMPORT_JOBS[jid]
+        jobs = list(_IMPORT_JOBS.values())
+    return {"ok": True, "jobs": jobs}
+
+
+@app.get("/import/status")
+def import_status():
+    jid = request.args.get("jid")
+    next_ = request.args.get("next", "")
+    with _IMPORT_LOCK:
+        jobs = list(_IMPORT_JOBS.values())
+    if next_ == "preview":
+        pending = session.get("import_pending")
+        if pending:
+                job_id = pending.get("job_id")
+                if job_id:
+                    with _IMPORT_LOCK:
+                        job = _IMPORT_JOBS.get(job_id)
+                else:
+                    job = None
+                if job and job["status"] == "done":
+                    return redirect(url_for("add_preview"))
+                elif job and job["status"] == "error":
+                    flash("Ошибка предпросмотра: " + job.get("msg", ""))
+                    return redirect(url_for("add"))
+                return render_template("import_waiting.html", pending=pending, kind="preview",
+                                       job_id=job["id"] if job else job_id)
+        return redirect(url_for("add"))
+    return render_template(
+        "import_status.html", jobs=jobs, current_jid=jid,
+        next_param=next_,
+    )
 
 
 @app.post("/api/progress")

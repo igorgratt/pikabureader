@@ -1,0 +1,121 @@
+{% extends "base.html" %}
+{% block title %}Импорт — PikaBuReader{% endblock %}
+
+{% block content %}
+<div class="feed-head">
+  <h1>Импорт книг</h1>
+  <div class="feed-sub">Книги обрабатываются в фоне — эта страница обновляется автоматически.</div>
+</div>
+
+<div id="job-list">
+  <h2 class="settings-title" style="margin-bottom:14px">Результаты импорта</h2>
+  {% for j in jobs %}
+  <div class="settings-card" id="job-{{ j.id }}" data-status="{{ j.status }}" data-id="{{ j.id }}">
+    <div class="import-card-head">
+      <span class="import-badge import-badge-{% if j.status=='done' %}ok{% elif j.status=='error' %}error{% else %}pending{% endif %}">
+        {% if j.status == 'queued' %}⏳ в очереди{% elif j.status == 'running' %}⟳ обрабатывается{% elif j.status == 'done' %}✓ готово{% else %}✗ ошибка{% endif %}
+      </span>
+      {% if j.filename %}<code class="import-file">{{ j.filename }}</code>{% endif %}
+    </div>
+    {% if j.msg %}<div class="import-msg">{{ j.msg }}</div>{% endif %}
+    {% if j.results %}
+      {% for r in j.results %}
+      <div class="import-card import-{{ r.status }}">
+        <div class="import-card-head">
+          <span class="import-badge import-badge-{{ r.status }}">{{ r.kind }}</span>
+          {% if r.file %}<code class="import-file">{{ r.file }}</code>{% endif %}
+        </div>
+        <div class="import-msg">{{ r.msg }}</div>
+        {% if r.hint %}<div class="import-hint">{{ r.hint }}</div>{% endif %}
+        {% if r.status == 'ok' and r.book_id %}
+          <a class="btn btn-sm" href="{{ url_for('book_page', book_id=r.book_id) }}">Открыть книгу →</a>
+        {% elif r.status == 'dup' and r.book_id %}
+          <a class="btn btn-sm" href="{{ url_for('book_page', book_id=r.book_id) }}">Открыть существующую →</a>
+        {% endif %}
+      </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+  {% else %}
+  <div class="settings-card">
+    <p class="empty-state">Нет активных задач импорта.</p>
+    <a class="btn" href="{{ url_for('add') }}">Добавить книгу</a>
+  </div>
+  {% endfor %}
+</div>
+
+<div id="all-done" class="settings-card" style="display:none">
+  <h2 class="settings-title">Импорт завершён</h2>
+  <a class="btn btn-accent" href="{{ url_for('add') }}">Добавить ещё книги</a>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function poll() {
+    fetch("{{ url_for('api_import_status') }}")
+      .then(r => r.json())
+      .then(data => {
+        if (!data.ok) { setTimeout(poll, 2000); return; }
+        const jobs = data.jobs;
+        let allDone = true;
+        jobs.forEach(j => {
+          const el = document.getElementById("job-" + j.id);
+          if (!el) return;
+          const badge = el.querySelector(".import-badge");
+          if (j.status === "queued") {
+            badge.className = "import-badge import-badge-pending";
+            badge.textContent = "⏳ в очереди";
+            allDone = false;
+          } else if (j.status === "running") {
+            badge.className = "import-badge import-badge-pending";
+            badge.textContent = "⟳ обрабатывается";
+            allDone = false;
+          } else if (j.status === "done") {
+            badge.className = "import-badge import-badge-ok";
+            badge.textContent = "✓ готово";
+            // показать результаты если есть
+            if (j.results && j.results.length) {
+              // заменяем карточки
+              let html = "";
+              j.results.forEach(r => {
+                html += `<div class="import-card import-${r.status}">
+                  <div class="import-card-head">
+                    <span class="import-badge import-badge-${r.status}">${r.kind || ''}</span>
+                    ${r.file ? `<code class="import-file">${r.file}</code>` : ''}
+                  </div>
+                  <div class="import-msg">${r.msg || ''}</div>
+                  ${r.hint ? `<div class="import-hint">${r.hint}</div>` : ''}
+                  ${r.status === 'ok' && r.book_id ? `<a class="btn btn-sm" href="/book/${r.book_id}">Открыть книгу →</a>` : ''}
+                  ${r.status === 'dup' && r.book_id ? `<a class="btn btn-sm" href="/book/${r.book_id}">Открыть существующую →</a>` : ''}
+                </div>`;
+              });
+              el.innerHTML = html;
+            }
+          } else if (j.status === "error") {
+            badge.className = "import-badge import-badge-error";
+            badge.textContent = "✗ ошибка";
+            if (j.msg) {
+              const msg = el.querySelector(".import-msg");
+              if (msg) msg.textContent = j.msg;
+              else {
+                const div = document.createElement("div");
+                div.className = "import-msg";
+                div.textContent = j.msg;
+                el.appendChild(div);
+              }
+            }
+          }
+        });
+        const doneEl = document.getElementById("all-done");
+        if (allDone && jobs.length > 0) {
+          doneEl.style.display = "block";
+        }
+        if (!allDone) setTimeout(poll, 800);
+      })
+      .catch(() => setTimeout(poll, 2000));
+  }
+  poll();
+</script>
+{% endblock %}

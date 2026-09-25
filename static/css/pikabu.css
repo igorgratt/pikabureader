@@ -701,6 +701,7 @@ kbd {
 }
 .import-badge-ok { color: var(--green); }
 .import-badge-error { color: var(--red); }
+.import-badge-pending { color: var(--orange, #e67e00); }
 .import-file { font-size: 12px; color: var(--text-2); }
 .import-msg { margin-top: 7px; font-size: 14px; }
 .import-hint { color: var(--text-2); font-size: 13px; margin-top: 3px; }

@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import time
 import urllib.parse
 import zipfile
 from datetime import date, timedelta
@@ -8,6 +9,20 @@ from datetime import date, timedelta
 import pytest
 
 import db
+
+
+def _wait_jobs(client, timeout=15.0):
+    """Поллит /api/import/status, пока все jobs не станут terminal.
+    Возвращает список jobs."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        data = client.get("/api/import/status").get_json()
+        if data.get("ok") and data.get("jobs"):
+            jobs = data["jobs"]
+            if all(j["status"] in ("done", "error") for j in jobs):
+                return jobs
+        time.sleep(0.05)
+    raise AssertionError("фоновый импорт не завершился за {}с".format(timeout))
 
 
 @pytest.fixture
@@ -21,6 +36,8 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "IMG_DIR", str(tmp_path / "images"))
     monkeypatch.setattr(app_module, "COVER_DIR", str(tmp_path / "covers"))
     monkeypatch.setattr(app_module, "IMPORT_LOG", str(tmp_path / "import.log"))
+    # F7: очистить очередь импорта между тестами
+    monkeypatch.setattr(app_module, "_IMPORT_JOBS", {})
     db.init_db()
     app_module.app.config["TESTING"] = True
     with app_module.app.test_client() as c:
@@ -462,19 +479,24 @@ def add_book_direct(title, tags="", author="Автор"):
 # ---------------------------------------------------------------- F3/F5: импорт
 
 def test_add_multiple_files_at_once(client):
-    """F3: несколько файлов в одной загрузке — каждый в свою карточку."""
+    """F3/F7: несколько файлов в одной загрузке — каждый в свою карточку (очередь в фоне)."""
     data = {
         "file": [
             (io.BytesIO(fb2_bytes("Книга А", ["Первый раздел"])), "a.fb2"),
             (io.BytesIO(fb2_bytes("Книга Б", ["Второй раздел"])), "b.fb2"),
         ],
     }
-    r = client.post("/add", data=data, content_type="multipart/form-data",
-                    follow_redirects=True)
-    page = r.get_data(as_text=True)
+    r = client.post("/add", data=data, content_type="multipart/form-data")
+    assert r.status_code == 302 and "/import/status" in r.headers["Location"]
+    jobs = _wait_jobs(client)
+    assert len(jobs) == 2
+    page = client.get("/import/status").get_data(as_text=True)
     assert "Результаты импорта" in page
     assert "Книга А" in page and "Книга Б" in page
-    assert page.count("import-badge-ok") == 2
+    # outer job badges: "✓ готово" появляется для каждого успешного job
+    # Добавлена — kind из _store_book; проверяем успешность
+    assert "Добавлена" in page
+    assert "Книга А" in page and "Книга Б" in page
     conn = db.connect()
     try:
         n = conn.execute("SELECT COUNT(*) c FROM books").fetchone()["c"]
@@ -484,45 +506,48 @@ def test_add_multiple_files_at_once(client):
 
 
 def test_add_error_shows_card(client):
-    """F5: ошибка импорта — понятная карточка, а не мелкий flash."""
+    """F5/F7: ошибка импорта — понятная карточка на странице статуса."""
     r = client.post(
         "/add",
         data={"file": (io.BytesIO(b"plain text"), "note.docx")},
         content_type="multipart/form-data",
-        follow_redirects=True,
     )
-    page = r.get_data(as_text=True)
+    assert r.status_code == 302 and "/import/status" in r.headers["Location"]
+    _wait_jobs(client)
+    page = client.get("/import/status").get_data(as_text=True)
     assert "Результаты импорта" in page
     assert "Формат не поддерживается" in page
     assert "EPUB, FB2" in page  # подсказка
 
 
 def test_add_duplicate_reports_card(client):
-    """F4/F5: дубликат — карточка со ссылкой на существующую книгу."""
+    """F4/F5/F7: дубликат — карточка со ссылкой на существующую книгу."""
     add_book_direct("Книга А", author="Иван Петров")
     r = client.post(
         "/add",
         data={"file": (io.BytesIO(fb2_bytes("Книга А", ["Раздел"])), "a.fb2")},
         content_type="multipart/form-data",
-        follow_redirects=True,
     )
-    page = r.get_data(as_text=True)
+    assert r.status_code == 302 and "/import/status" in r.headers["Location"]
+    _wait_jobs(client)
+    page = client.get("/import/status").get_data(as_text=True)
     assert "Уже в библиотеке" in page
     assert "Открыть существующую" in page
 
 
 def test_add_txt_markdown_import(client):
-    """F6: .txt/.md импортируются, главы по заголовкам # / ##."""
+    """F6/F7: .txt/.md импортируются, главы по заголовкам # / ##."""
     content = "# Раздел первый\nПривет, текст-абзац.\n\n## Раздел второй\nЕщё текст."
     r = client.post(
         "/add",
         data={"file": (io.BytesIO(content.encode("utf-8")), "заметки.md")},
         content_type="multipart/form-data",
-        follow_redirects=True,
     )
-    page = r.get_data(as_text=True)
+    assert r.status_code == 302 and "/import/status" in r.headers["Location"]
+    _wait_jobs(client)
+    page = client.get("/import/status").get_data(as_text=True)
     assert "Результаты импорта" in page
-    assert "import-badge-ok" in page
+    assert "Добавлена" in page
 
     conn = db.connect()
     try:
@@ -535,28 +560,32 @@ def test_add_txt_markdown_import(client):
 
 
 def test_add_empty_txt_shows_card(client):
-    """F6/F5: пустой txt — понятная карточка «Пустой файл»."""
+    """F6/F5/F7: пустой txt — понятная карточка «Пустой файл»."""
     r = client.post(
         "/add",
         data={"file": (io.BytesIO("   \n\n".encode()), "empty.txt")},
         content_type="multipart/form-data",
-        follow_redirects=True,
     )
-    page = r.get_data(as_text=True)
+    assert r.status_code == 302 and "/import/status" in r.headers["Location"]
+    _wait_jobs(client)
+    page = client.get("/import/status").get_data(as_text=True)
     assert "Пустой файл" in page
 
 
 # ---------------------------------------------------------------- F9: предпросмотр
 
 def test_import_preview_flow(client):
-    """F9: предпросмотр → смена режима → импорт."""
+    """F9/F7: предпросмотр через очередь → смена режима → импорт."""
     fb = fb2_bytes("Большая книга", [("Раздел", "Слово " * 700)])
     r = client.post(
         "/add?preview=1",
         data={"file": (io.BytesIO(fb), "big.fb2"), "preview": "1"},
         content_type="multipart/form-data",
     )
-    assert r.status_code == 302 and "/add/preview" in r.headers["Location"]
+    assert r.status_code == 302 and "/import/status" in r.headers["Location"]
+    # ждём завершения фонового preview-job
+    _wait_jobs(client)
+    # job готов —session содержит import_pending с pickle-кэшем → предпросмотр работает
     page = client.get("/add/preview?m=parts").get_data(as_text=True)
     assert "Большая книга" in page and "Будет" in page
     page_compact = client.get("/add/preview?m=compact").get_data(as_text=True)
@@ -1119,3 +1148,94 @@ def test_font_and_autoscroll_in_reader(client):
     assert "/fonts/custom.otf" in page
     settings_page = client.get("/settings").get_data(as_text=True)
     assert "custom.otf" in settings_page and "Удалить свой шрифт" in settings_page
+
+
+# ---------------------------------------------------------------- F7: фоновая очередь импорта
+
+def test_import_queue_api_returns_jobs(client):
+    """F7: /api/import/status возвращает список задач."""
+    data = {"file": (io.BytesIO(fb2_bytes("Q-тест", ["Секция"])), "q.fb2")}
+    client.post("/add", data=data, content_type="multipart/form-data")
+    d = client.get("/api/import/status").get_json()
+    assert d["ok"] and len(d["jobs"]) == 1
+    assert d["jobs"][0]["filename"] == "q.fb2"
+    assert d["jobs"][0]["status"] in ("queued", "running")
+
+
+def test_import_status_page_shows_jobs(client):
+    """F7: страница /import/status рендерит задачи."""
+    data = {"file": (io.BytesIO(fb2_bytes("Status-тест", ["Секция"])), "s.fb2")}
+    client.post("/add", data=data, content_type="multipart/form-data")
+    _wait_jobs(client)
+    page = client.get("/import/status").get_data(as_text=True)
+    assert "Результаты импорта" in page
+    assert "Status-тест" in page or "s.fb2" in page
+
+
+def test_preview_caching_from_queue(client):
+    """F7: preview job создаёт pickle-кэш, add_preview читает его."""
+    fb = fb2_bytes("Кэш-тест", ["Глава"])
+    client.post(
+        "/add?preview=1",
+        data={"file": (io.BytesIO(fb), "cached.fb2"), "preview": "1"},
+        content_type="multipart/form-data",
+    )
+    _wait_jobs(client)
+    page = client.get("/add/preview?m=parts").get_data(as_text=True)
+    assert "Кэш-тест" in page and "Глава" in page
+
+
+# ---------------------------------------------------------------- F8: webp-миниатюры
+
+def test_import_converts_images_to_webp(client):
+    """F8: при импорте книги с картинками они сохраняются как webp ≤800px."""
+    import app as _am
+
+    if not _am._HAS_PIL:
+        pytest.skip("Pillow not installed")
+
+    from PIL import Image as _PIL_Image
+    import base64
+
+    # создаём валидный PNG 10x10 через Pillow
+    img = _PIL_Image.new("RGB", (10, 10), color="red")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    png_data = buf.getvalue()
+
+    b64 = base64.b64encode(png_data).decode()
+    doc = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<FictionBook xmlns="http://www.gribuser.ru/xml/fb2.1" xmlns:l="http://www.w3.org/1999/xlink">'
+        "<description><title-info><book-title>Картинка</book-title></title-info></description>"
+        "<body><section><p>Текст</p>"
+        '<image l:href="#pic1"/><p>После картинки</p></section></body>'
+        f'<binary id="pic1" content-type="image/png">{b64}</binary>'
+        "</FictionBook>"
+    ).encode("utf-8")
+
+    data = {"file": (io.BytesIO(doc), "pic.fb2")}
+    client.post("/add", data=data, content_type="multipart/form-data")
+    _wait_jobs(client)
+    page = client.get("/import/status").get_data(as_text=True)
+    assert "Добавлена" in page
+
+    conn = db.connect()
+    try:
+        row = conn.execute(
+            "SELECT b.id FROM books b ORDER BY b.id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        book_id = row["id"]
+        img_dir = os.path.join(_am.IMG_DIR, f"book_{book_id}")
+        files = os.listdir(img_dir)
+        assert len(files) == 1, f"ожидался 1 файл, получили {files}"
+        fname = files[0]
+        assert fname.endswith(".webp"), f"ожидался webp, получили {fname}"
+        img2 = _PIL_Image.open(os.path.join(img_dir, fname))
+        w, h = img2.size
+        assert max(w, h) <= 800, f"картинка {w}x{h} превышает 800px"
+        assert img2.format == "WEBP"
+    finally:
+        conn.close()
+
