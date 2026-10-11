@@ -53,6 +53,18 @@ python pika.py backup data-backup.zip   # бэкап data/ в zip
 Коды возврата: 0 — успех, 1 — ошибка, 2 — неверные аргументы.
 Подробности — `python pika.py --help`.
 
+### Свои шрифты
+
+Загрузи `.ttf` или `.otf` → `/settings` → раздел «Шрифт».
+Например шрифт консоли PowerShell (**Cascadia Mono**):
+
+```powershell
+Copy-Item "C:\\Windows\\Fonts\\CascadiaMono.ttf" $env:USERPROFILE
+# Открой http://127.0.0.1:8000/settings и загрузи файл
+```
+
+Загруженный шрифт появится как «Custom font» в настройках чтения на странице главы.
+
 ### Docker
 
 ```bash
